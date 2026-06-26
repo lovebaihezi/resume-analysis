@@ -3,6 +3,7 @@ import type {
     JdAnalyzeResult,
     JdInfoResult,
     JdListResult,
+    ResumeAnalysis,
     ResumeInfoResult,
     ResumeListResult,
     ResumeUploadResult,
@@ -46,7 +47,7 @@ const skill = arkType({
     "des?": "string",
 });
 
-const resumeAnalysis = arkType({
+export const resumeAnalysisSchema = arkType({
     rawText: "string",
     basic: {
         name: "string",
@@ -84,7 +85,7 @@ const jobDescriptionSummary = arkType({
 });
 
 export const resumeUploadResultSchema = arkType({
-    resume: resumeAnalysis,
+    resume: resumeAnalysisSchema,
     upload: {
         bytes: "number",
         percent: "number",
@@ -98,7 +99,7 @@ export const resumeListResultSchema = arkType({
 });
 
 export const resumeInfoResultSchema = arkType({
-    resume: resumeAnalysis,
+    resume: resumeAnalysisSchema,
 });
 
 export const jdAnalyzeResultSchema = arkType({
@@ -124,6 +125,10 @@ export function parseResumeListResult(data: unknown): ResumeListResult {
 
 export function parseResumeInfoResult(data: unknown): ResumeInfoResult {
     return resumeInfoResultSchema.assert(data) as ResumeInfoResult;
+}
+
+export function parseResumeAnalysis(data: unknown): ResumeAnalysis {
+    return resumeAnalysisSchema.assert(data) as ResumeAnalysis;
 }
 
 export function parseJdAnalyzeResult(data: unknown): JdAnalyzeResult {
