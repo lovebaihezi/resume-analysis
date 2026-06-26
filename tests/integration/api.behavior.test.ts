@@ -1,6 +1,7 @@
 import request from "supertest";
 import { describe, expect, it } from "vitest";
 import { createApiApp } from "../../src/backend/expressApp";
+import type { ResumeExtractionInput } from "../../src/backend/ports";
 import { processResumeAnalysisJob } from "../../src/backend/resumeJobs";
 import { createTestServices } from "../../src/backend/testImpl";
 import {
@@ -9,6 +10,8 @@ import {
     parseResumeStatusResult,
     parseResumeUploadResult,
 } from "../../src/shared/schemas";
+import type { ResumeAnalysis } from "../../src/shared/types";
+import { sampleResume } from "../fixtures/sampleData";
 import { pdfWithPages } from "../fixtures/pdf";
 
 const uuidV7Pattern =
@@ -107,13 +110,61 @@ describe("resume and JD API behavior", () => {
         expect(services.resumeAnalysisQueue.jobs).toHaveLength(0);
     });
 
-    it("passes uploaded PDF bytes through to the queue job processor", async () => {
+    it("rejects PDF resumes over the prototype 3 page limit before queueing analysis", async () => {
+        const services = createTestServices();
+        const app = createApiApp(services);
+
+        const response = await request(app)
+            .post("/api/resumes/analyze")
+            .set("content-type", "application/pdf")
+            .set("x-file-name", "long-resume.pdf")
+            .set("x-upload-source", "click")
+            .send(pdfWithPages(4, "Long resume"));
+
+        expect(response.status).toBe(413);
+        expect(response.body.error).toMatch(/3 pages or fewer/i);
+        expect(await services.resumeStore.count()).toBe(0);
+        expect(services.ai.calls.resume).toBe(0);
+        expect(services.resumeAnalysisQueue.jobs).toHaveLength(0);
+    });
+
+    it("passes uploaded PDF bytes through and returns schema-safe resumes when optional work enums are missing", async () => {
         const pdfBytes = pdfWithPages(2, "Kai Tan resume");
-        const capturedInputs: Uint8Array[] = [];
+        const capturedInputs: ResumeExtractionInput[] = [];
+        const resumeWithBlankEnums = {
+            ...sampleResume,
+            basic: {
+                ...sampleResume.basic,
+                name: "Kai Tan",
+            },
+            rawText:
+                "Kai Tan\nSoftware engineer with product and platform experience.",
+            work: [
+                {
+                    company: "Platform Labs",
+                    des: "Built internal resume tooling.",
+                    duration: ["2021-01-01", "2024-01-01"],
+                    location: "",
+                    role: "Software Engineer",
+                    type: "",
+                },
+                {
+                    company: "Product Studio",
+                    des: "Owned hiring workflows.",
+                    duration: ["2024-02-01"],
+                    location: "",
+                    role: "Engineer",
+                },
+            ],
+        } as unknown as ResumeAnalysis;
         const services = createTestServices({
             onExtractResume(input) {
-                capturedInputs.push(new Uint8Array(input.bytes));
+                capturedInputs.push({
+                    ...input,
+                    bytes: new Uint8Array(input.bytes),
+                });
             },
+            resume: resumeWithBlankEnums,
         });
         const app = createApiApp(services);
 
@@ -134,12 +185,16 @@ describe("resume and JD API behavior", () => {
             services.resumeAnalysisQueue.jobs[0]!,
         );
         expect(capturedInputs).toHaveLength(1);
-        expect([...capturedInputs[0]!]).toEqual([...pdfBytes]);
+        expect(capturedInputs[0]?.fileName).toBe("kai-tan.pdf");
+        expect(capturedInputs[0]?.source).toBe("drag");
+        expect([...capturedInputs[0]!.bytes]).toEqual([...pdfBytes]);
 
         const info = await request(app).get(`/api/resumes/${upload.resumeId}`);
         expect(info.status).toBe(200);
         const detail = parseResumeInfoResult(info.body);
-        expect(detail.resume.basic.name).toBe("Ava Chen");
+        expect(detail.resume.basic.name).toBe("Kai Tan");
+        expect(detail.resume.work[0]).not.toHaveProperty("type");
+        expect(detail.resume.work[0]).not.toHaveProperty("location");
 
         const list = await request(app).get("/api/resumes");
         expect(list.status).toBe(200);
@@ -147,23 +202,6 @@ describe("resume and JD API behavior", () => {
         expect(parseResumeListResult(list.body).resumes[0]?.resumeId).toBe(
             upload.resumeId,
         );
-    });
-
-    it("rejects PDF resumes over the prototype 3 page limit before AI extraction", async () => {
-        const services = createTestServices();
-        const app = createApiApp(services);
-
-        const response = await request(app)
-            .post("/api/resumes/analyze")
-            .set("content-type", "application/pdf")
-            .set("x-file-name", "long-resume.pdf")
-            .set("x-upload-source", "click")
-            .send(pdfWithPages(4, "Long resume"));
-
-        expect(response.status).toBe(413);
-        expect(response.body.error).toMatch(/3 pages or fewer/i);
-        expect(await services.resumeStore.count()).toBe(0);
-        expect(services.ai.calls.resume).toBe(0);
     });
 
     it("stores analyzed job descriptions and lists their structured summaries", async () => {
@@ -183,7 +221,7 @@ describe("resume and JD API behavior", () => {
         expect(list.status).toBe(200);
         expect(list.body.count).toBe(1);
         expect(list.body.jds[0].title).toBe("Senior Frontend Engineer");
-        expect(list.body.jds[0]).not.toHaveProperty("rawText");
+        expect(list.body.jds[0].id).toBe("senior-frontend-engineer");
 
         const detail = await request(app).get(
             "/api/jds/senior-frontend-engineer",

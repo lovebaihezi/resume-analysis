@@ -4,13 +4,14 @@ import type {
     JobDescriptionStore,
     PendingResumeUpload,
     ResumeAnalysisJob,
-    ResumeAnalysisQueue,
     ResumeExtractionInput,
+    ResumeAnalysisQueue,
     ResumeStore,
     ResumeUploadRecord,
 } from "./ports";
-import { createResumeId } from "./ids";
 import { DuplicateJobDescriptionError } from "./ports";
+import { createResumeId } from "./ids";
+import { normalizeResumeAnalysis } from "./normalization";
 import type {
     JobDescription,
     JobDescriptionSummary,
@@ -118,12 +119,13 @@ class MemoryResumeStore implements ResumeStore {
         resumeId: string,
         resume: ResumeAnalysis,
     ): Promise<ResumeDocument> {
+        const normalizedResume = normalizeResumeAnalysis(resume);
         const pending = this.pending.get(resumeId);
         const now = new Date().toISOString();
         const createdAt = pending?.createdAt ?? now;
         const document: ResumeDocument = {
             createdAt,
-            resume,
+            resume: normalizedResume,
             resumeId,
             status: "ready",
             updatedAt: now,
@@ -133,7 +135,7 @@ class MemoryResumeStore implements ResumeStore {
         this.records.set(document.resumeId, document);
         this.summaries.set(
             document.resumeId,
-            summarizeResume(resume, document),
+            summarizeResume(normalizedResume, document),
         );
 
         return document;
@@ -184,27 +186,34 @@ class MemoryResumeStore implements ResumeStore {
 }
 
 class MemoryJdStore implements JobDescriptionStore {
-    readonly records = new Map<string, JobDescription>();
+    readonly records = new Map<
+        string,
+        { jd: JobDescription; updatedAt: string }
+    >();
 
     async save(jd: JobDescription): Promise<JobDescription> {
         if (this.records.has(jd.id)) {
             throw new DuplicateJobDescriptionError(jd.id);
         }
 
-        this.records.set(jd.id, jd);
+        this.records.set(jd.id, {
+            jd,
+            updatedAt: new Date().toISOString(),
+        });
 
         return jd;
     }
 
     async getById(id: string): Promise<JobDescription | undefined> {
-        return this.records.get(id);
+        return this.records.get(id)?.jd;
     }
 
     async listSummaries(): Promise<JobDescriptionSummary[]> {
-        return [...this.records.values()].map((jd) => ({
+        return [...this.records.values()].map(({ jd, updatedAt }) => ({
             id: jd.id,
             tags: jd.tags,
             title: jd.title,
+            updatedAt,
         }));
     }
 
