@@ -90,6 +90,7 @@ const jobDescriptionSummary = arkType({
     id: "string",
     tags: "string[]",
     title: "string",
+    updatedAt: "string",
 });
 
 export const resumeUploadResultSchema = arkType({
@@ -142,16 +143,16 @@ export function parseResumeListResult(data: unknown): ResumeListResult {
     return resumeListResultSchema.assert(data) as ResumeListResult;
 }
 
+export function parseResumeAnalysis(data: unknown): ResumeAnalysis {
+    return resumeAnalysisSchema.assert(data) as ResumeAnalysis;
+}
+
 export function parseResumeInfoResult(data: unknown): ResumeInfoResult {
     return resumeInfoResultSchema.assert(data) as ResumeInfoResult;
 }
 
 export function parseResumeStatusResult(data: unknown): ResumeStatusResult {
     return resumeStatusResultSchema.assert(data) as ResumeStatusResult;
-}
-
-export function parseResumeAnalysis(data: unknown): ResumeAnalysis {
-    return resumeAnalysisSchema.assert(data) as ResumeAnalysis;
 }
 
 export function parseJdAnalyzeResult(data: unknown): JdAnalyzeResult {

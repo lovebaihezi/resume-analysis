@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { PendingResumeUpload } from "../ports";
 import type {
     JobDescription,
+    JobDescriptionSummary,
     ResumeAnalysis,
     ResumeDocument,
     ResumeMetadata,
@@ -36,6 +37,22 @@ type ResumeDocumentRow = {
     status: ResumeMetadata["status"];
     updated_at: string;
 };
+
+type JobDescriptionRow = {
+    created_at: string;
+    des: string;
+    id: string;
+    raw_text: string;
+    required_experiences_json: string;
+    required_skills_json: string;
+    tags_json: string;
+    title: string;
+    updated_at: string;
+};
+
+export type JobDescriptionCreateResult =
+    | { jd: JobDescription; ok: true }
+    | { code: "duplicate"; ok: false };
 
 export class ResumeRegistryObject extends DurableObject<Env> {
     constructor(ctx: DurableObjectState, env: Env) {
@@ -343,6 +360,99 @@ export class ResumeDocumentObject extends DurableObject<Env> {
     }
 }
 
+export class JobDescriptionStoreObject extends DurableObject<Env> {
+    constructor(ctx: DurableObjectState, env: Env) {
+        super(ctx, env);
+        ctx.blockConcurrencyWhile(async () => {
+            this.ctx.storage.sql.exec(`
+                CREATE TABLE IF NOT EXISTS job_descriptions (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    raw_text TEXT NOT NULL,
+                    des TEXT NOT NULL,
+                    tags_json TEXT NOT NULL,
+                    required_skills_json TEXT NOT NULL,
+                    required_experiences_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+            `);
+            this.ctx.storage.sql.exec(`
+                CREATE INDEX IF NOT EXISTS idx_job_descriptions_updated
+                ON job_descriptions (updated_at);
+            `);
+        });
+    }
+
+    async create(jd: JobDescription): Promise<JobDescriptionCreateResult> {
+        if (await this.getById(jd.id)) {
+            return { code: "duplicate", ok: false };
+        }
+
+        const now = new Date().toISOString();
+
+        this.ctx.storage.sql.exec(
+            `INSERT INTO job_descriptions (
+                id,
+                title,
+                raw_text,
+                des,
+                tags_json,
+                required_skills_json,
+                required_experiences_json,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            jd.id,
+            jd.title,
+            jd.rawText,
+            jd.des,
+            JSON.stringify(jd.tags),
+            JSON.stringify(jd.requiredSkills),
+            JSON.stringify(jd.requiredExperiences),
+            now,
+            now,
+        );
+
+        return { jd, ok: true };
+    }
+
+    async getById(id: string): Promise<JobDescription | undefined> {
+        const row = this.ctx.storage.sql
+            .exec<JobDescriptionRow>(
+                "SELECT * FROM job_descriptions WHERE id = ?",
+                id,
+            )
+            .toArray()[0];
+
+        return row ? jdFromRow(row) : undefined;
+    }
+
+    async listSummaries(): Promise<JobDescriptionSummary[]> {
+        return this.ctx.storage.sql
+            .exec<JobDescriptionRow>(
+                "SELECT * FROM job_descriptions ORDER BY updated_at DESC",
+            )
+            .toArray()
+            .map((row) => ({
+                id: row.id,
+                tags: readStringArray(row.tags_json),
+                title: row.title,
+                updatedAt: row.updated_at,
+            }));
+    }
+
+    async count(): Promise<number> {
+        const row = this.ctx.storage.sql
+            .exec<{
+                count: number;
+            }>("SELECT COUNT(*) AS count FROM job_descriptions")
+            .toArray()[0];
+
+        return row?.count ?? 0;
+    }
+}
+
 function resumeSummaryFromRow(row: ResumeRegistryRow): ResumeSummary {
     return {
         archivedAt: row.archived_at ?? undefined,
@@ -365,6 +475,18 @@ function resumeDocumentFromRow(row: ResumeDocumentRow): ResumeDocument {
         resumeId: row.resume_id,
         status: row.status,
         updatedAt: row.updated_at,
+    };
+}
+
+function jdFromRow(row: JobDescriptionRow): JobDescription {
+    return {
+        des: row.des,
+        id: row.id,
+        rawText: row.raw_text,
+        requiredExperiences: readStringArray(row.required_experiences_json),
+        requiredSkills: readStringArray(row.required_skills_json),
+        tags: readStringArray(row.tags_json),
+        title: row.title,
     };
 }
 

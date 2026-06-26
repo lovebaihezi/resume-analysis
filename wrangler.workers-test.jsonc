@@ -15,12 +15,8 @@
                 "class_name": "ResumeDocumentObject",
             },
             {
-                "name": "JD_OBJECT",
-                "class_name": "JobDescriptionObject",
-            },
-            {
-                "name": "JD_INDEX",
-                "class_name": "JobDescriptionIndexObject",
+                "name": "JD_STORE",
+                "class_name": "JobDescriptionStoreObject",
             },
         ],
     },
@@ -47,7 +43,12 @@
             "new_sqlite_classes": [
                 "ResumeRegistryObject",
                 "ResumeDocumentObject",
+                "JobDescriptionStoreObject",
             ],
         },
     ],
+    "vars": {
+        "AI_GATEWAY_NAME": "collects-auto-ai",
+        "GEMINI_MODEL": "gemini-3.5-flash",
+    },
 }

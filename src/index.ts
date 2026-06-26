@@ -6,6 +6,7 @@ import { processResumeAnalysisQueueBatch } from "./backend/resumeJobs";
 import {
     JobDescriptionIndexObject,
     JobDescriptionObject,
+    JobDescriptionStoreObject,
     ResumeDocumentObject,
     ResumeIndexObject,
     ResumeObject,
@@ -19,6 +20,7 @@ import {
 export {
     JobDescriptionIndexObject,
     JobDescriptionObject,
+    JobDescriptionStoreObject,
     ResumeDocumentObject,
     ResumeIndexObject,
     ResumeObject,

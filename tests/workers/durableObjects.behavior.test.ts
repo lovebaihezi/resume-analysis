@@ -20,7 +20,7 @@ import type {
     ResumeSummary,
 } from "../../src/shared/types";
 import { pdfWithPages } from "../fixtures/pdf";
-import { sampleResume } from "../fixtures/sampleData";
+import { sampleJobDescription, sampleResume } from "../fixtures/sampleData";
 
 const createdAt = "2026-06-26T00:00:00.000Z";
 const apiOrigin = "https://resume-analysis.test";
@@ -66,42 +66,32 @@ class FixtureAi {
         this.runCalls.push({ input, model, options });
 
         return {
-            response: JSON.stringify(sampleResume),
+            response: JSON.stringify(sampleJobDescription),
         };
     }
 
-    gateway(gatewayId: string): {
+    gateway(_gatewayId: string): {
         run: (request: unknown, options?: unknown) => Promise<Response>;
     } {
-        void gatewayId;
-
         return {
             run: async (request: unknown, options?: unknown) => {
                 this.gatewayCalls.push({ options, request });
 
-                return new Response(
-                    JSON.stringify({
-                        candidates: [
-                            {
-                                content: {
-                                    parts: [
-                                        {
-                                            text: JSON.stringify(sampleResume),
-                                        },
-                                    ],
-                                    role: "model",
-                                },
-                                finishReason: "STOP",
+                return Response.json({
+                    candidates: [
+                        {
+                            content: {
+                                parts: [
+                                    {
+                                        text: JSON.stringify(sampleResume),
+                                    },
+                                ],
+                                role: "model",
                             },
-                        ],
-                    }),
-                    {
-                        headers: {
-                            "content-type": "application/json",
+                            finishReason: "STOP",
                         },
-                        status: 200,
-                    },
-                );
+                    ],
+                });
             },
         };
     }
@@ -327,6 +317,32 @@ describe("Cloudflare Durable Object storage behavior", () => {
         });
     });
 
+    it("rejects duplicate job description ids and serves list/detail data", async () => {
+        const store = env.JD_STORE.getByName("jd-duplicates");
+
+        const first = await store.create(sampleJobDescription);
+        const duplicate = await store.create(sampleJobDescription);
+
+        expect(first).toMatchObject({
+            jd: {
+                id: "senior-frontend-engineer",
+                title: "Senior Frontend Engineer",
+            },
+            ok: true,
+        });
+        expect(duplicate).toEqual({ code: "duplicate", ok: false });
+        expect(await store.count()).toBe(1);
+        expect(await store.listSummaries()).toEqual([
+            expect.objectContaining({
+                id: "senior-frontend-engineer",
+                title: "Senior Frontend Engineer",
+            }),
+        ]);
+        expect(await store.getById("senior-frontend-engineer")).toMatchObject({
+            requiredSkills: expect.arrayContaining(["React"]),
+            title: "Senior Frontend Engineer",
+        });
+    });
 });
 
 function workerEnvWithAi(ai: FixtureAi): CloudflareEnv {
@@ -334,8 +350,7 @@ function workerEnvWithAi(ai: FixtureAi): CloudflareEnv {
         AI: ai as unknown as Ai,
         AI_GATEWAY_NAME: "collects-auto-ai",
         GEMINI_MODEL: "gemini-3.5-flash",
-        JD_INDEX: env.JD_INDEX,
-        JD_OBJECT: env.JD_OBJECT,
+        JD_STORE: env.JD_STORE,
         RESUME_ANALYSIS_QUEUE: env.RESUME_ANALYSIS_QUEUE,
         RESUME_DOCUMENT: env.RESUME_DOCUMENT,
         RESUME_REGISTRY: env.RESUME_REGISTRY,

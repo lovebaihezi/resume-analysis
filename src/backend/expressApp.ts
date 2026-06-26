@@ -1,8 +1,8 @@
 import express from "express";
 import type { ErrorRequestHandler, Request, RequestHandler } from "express";
 import { DuplicateJobDescriptionError, type AppServices } from "./ports";
-import { assertResumePdfPageLimit, PdfPageLimitError } from "./pdf";
 import type { UploadSource } from "../shared/types";
+import { assertResumePdfPageLimit, PdfPageLimitError } from "./pdf";
 
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 const uploadSources = new Set(["click", "drag", "paste"]);

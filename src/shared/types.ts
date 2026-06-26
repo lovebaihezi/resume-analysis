@@ -86,6 +86,7 @@ export type JobDescriptionSummary = {
     id: string;
     tags: string[];
     title: string;
+    updatedAt: string;
 };
 
 export type ResumeUploadResult = ResumeMetadata & {

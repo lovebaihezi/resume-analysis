@@ -13,6 +13,7 @@
         "lint": "oxlint . --react-plugin --jsx-a11y-plugin --vitest-plugin -D correctness -W suspicious -W perf -A react-in-jsx-scope && node scripts/check-xstate-links.mjs",
         "test": "pnpm run test:api && pnpm run test:browser",
         "test:api": "vitest run --config vitest.config.ts && vitest run --config vitest.workers.config.mts",
+        "test:real-ai": "vitest run --config vitest.workers.real.config.mts",
         "test:browser": "vitest run --config vitest.browser.config.ts",
         "test:e2e": "playwright test",
         "start": "wrangler dev",
