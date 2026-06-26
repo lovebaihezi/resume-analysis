@@ -72,6 +72,9 @@ async function createBackend(options: BackendOptions): Promise<TestBackend> {
     const originalEnqueue = services.resumeAnalysisQueue.enqueue.bind(
         services.resumeAnalysisQueue,
     );
+    const originalExtractResumeStream = services.ai.extractResumeStream.bind(
+        services.ai,
+    );
 
     services.resumeAnalysisQueue.enqueue = async (job) => {
         await originalEnqueue(job);
@@ -79,6 +82,15 @@ async function createBackend(options: BackendOptions): Promise<TestBackend> {
         if (options.mode === "auto") {
             await processResumeAnalysisJob(services, job);
         }
+    };
+    services.ai.extractResumeStream = async (input, callbacks) => {
+        const resume = await originalExtractResumeStream(input, callbacks);
+
+        if (options.mode === "pending") {
+            await delay(1_000);
+        }
+
+        return resume;
     };
 
     if (options.seedResume) {
@@ -103,4 +115,8 @@ function sendJson(response: ServerResponse, payload: unknown): void {
     response.statusCode = 200;
     response.setHeader("content-type", "application/json");
     response.end(JSON.stringify(payload));
+}
+
+function delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
 }

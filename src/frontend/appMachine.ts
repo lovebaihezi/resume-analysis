@@ -1,8 +1,23 @@
 import { assign, setup } from "xstate";
 import type { UploadProgress, UploadSource } from "./apiClient";
+import type { ResumeStreamPhase } from "../shared/resumeStream";
+
+export type ExtractionStatusMessage = {
+    message: string;
+    phase: ResumeStreamPhase;
+};
+
+export type ExtractionToken = {
+    path: string;
+    value: string;
+};
 
 type AppContext = {
     error?: string;
+    extraction: {
+        messages: ExtractionStatusMessage[];
+        tokens: ExtractionToken[];
+    };
     navigate: (to: string) => void;
     upload: {
         bytes: number;
@@ -24,6 +39,16 @@ type AppEvent =
     | { type: "UPLOAD_REJECTED"; message: string }
     | { type: "UPLOAD_STARTED"; fileName: string; source: UploadSource }
     | { type: "UPLOAD_PROGRESS"; progress: UploadProgress }
+    | {
+          type: "RESUME_STREAM_STATUS";
+          message: string;
+          phase: ResumeStreamPhase;
+      }
+    | {
+          type: "RESUME_STREAM_TOKEN";
+          path: string;
+          value: string;
+      }
     | { type: "UPLOAD_ACCEPTED"; bytes: number; source: UploadSource }
     | {
           type: "UPLOAD_DONE";
@@ -55,6 +80,10 @@ export const appMachine = setup({
     },
 }).createMachine({
     context: ({ input }) => ({
+        extraction: {
+            messages: [],
+            tokens: [],
+        },
         navigate: input.navigate,
         upload: {
             bytes: 0,
@@ -66,6 +95,44 @@ export const appMachine = setup({
     on: {
         NAVIGATE: {
             actions: "pushRoute",
+        },
+        RESUME_STREAM_STATUS: {
+            actions: assign(({ context, event }) => ({
+                error: undefined,
+                extraction: {
+                    ...context.extraction,
+                    messages: [
+                        ...context.extraction.messages,
+                        {
+                            message: event.message,
+                            phase: event.phase,
+                        },
+                    ].slice(-8),
+                },
+                upload: {
+                    ...context.upload,
+                    percent: Math.max(context.upload.percent, 100),
+                    status: "analyzing" as const,
+                },
+            })),
+        },
+        RESUME_STREAM_TOKEN: {
+            actions: assign(({ context, event }) => ({
+                extraction: {
+                    ...context.extraction,
+                    tokens: [
+                        ...context.extraction.tokens,
+                        {
+                            path: event.path,
+                            value: event.value,
+                        },
+                    ].slice(-40),
+                },
+                upload: {
+                    ...context.upload,
+                    status: "analyzing" as const,
+                },
+            })),
         },
         UPLOAD_ACCEPTED: {
             actions: assign(({ context, event }) => ({
@@ -95,11 +162,13 @@ export const appMachine = setup({
             ],
         },
         UPLOAD_FAILED: {
-            actions: assign(({ event }) => ({
+            actions: assign(({ context, event }) => ({
                 error: event.message,
                 upload: {
-                    bytes: 0,
-                    percent: 0,
+                    bytes: context.upload.bytes,
+                    fileName: context.upload.fileName,
+                    percent: context.upload.percent,
+                    source: context.upload.source,
                     status: "error" as const,
                 },
             })),
@@ -117,6 +186,10 @@ export const appMachine = setup({
         UPLOAD_REJECTED: {
             actions: assign(({ event }) => ({
                 error: event.message,
+                extraction: {
+                    messages: [],
+                    tokens: [],
+                },
                 upload: {
                     bytes: 0,
                     percent: 0,
@@ -127,6 +200,10 @@ export const appMachine = setup({
         UPLOAD_STARTED: {
             actions: assign(({ event }) => ({
                 error: undefined,
+                extraction: {
+                    messages: [],
+                    tokens: [],
+                },
                 upload: {
                     bytes: 0,
                     fileName: event.fileName,

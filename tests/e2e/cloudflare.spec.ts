@@ -9,7 +9,7 @@ test.describe("deployed Cloudflare Worker app", () => {
         "Set E2E_BASE_URL to run against a deployed Worker URL.",
     );
 
-    test("uploads a PDF through the real app and opens the stored resume detail page", async ({
+    test("uploads a PDF through the real app and preserves it after refresh", async ({
         page,
     }) => {
         let resumeId: string | undefined;
@@ -31,7 +31,18 @@ test.describe("deployed Cloudflare Worker app", () => {
             });
             await expect(page).toHaveURL(/\/resumes\/.+/);
             resumeId = resumeIdFromUrl(page.url());
+            await expect(page.getByText(/ava chen/i).first()).toBeVisible();
+
+            await page.reload();
+            await expect(page.getByText(/raw resume/i)).toBeVisible({
+                timeout: 120_000,
+            });
+            await expect(page.getByText(/ava chen/i).first()).toBeVisible();
+
             await page.getByRole("link", { name: /uploaded resumes/i }).click();
+            await expect(page.getByRole("table")).toContainText(/Ava/i);
+
+            await page.reload();
             await expect(page.getByRole("table")).toContainText(/Ava/i);
         } finally {
             if (resumeId) {

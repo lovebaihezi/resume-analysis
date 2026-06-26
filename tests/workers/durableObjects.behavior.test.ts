@@ -14,6 +14,7 @@ import {
     parseResumeStatusResult,
     parseResumeUploadResult,
 } from "../../src/shared/schemas";
+import { resumeAnalysisToFieldTags } from "../../src/shared/resumeStream";
 import { pdfWithPages } from "../fixtures/pdf";
 import { sampleJobDescription, sampleResume } from "../fixtures/sampleData";
 
@@ -41,7 +42,9 @@ class FixtureAi {
                             content: {
                                 parts: [
                                     {
-                                        text: JSON.stringify(sampleResume),
+                                        text: resumeAnalysisToFieldTags(
+                                            sampleResume,
+                                        ).join(""),
                                     },
                                 ],
                                 role: "model",

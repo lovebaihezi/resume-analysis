@@ -1,3 +1,4 @@
+/* oxlint-disable no-await-in-loop -- stream readers and token callbacks must preserve chunk order. */
 import type {
     AiExtractor,
     AppServices,
@@ -6,6 +7,7 @@ import type {
     ResumeAnalysisJob,
     ResumeAnalysisQueue,
     ResumeExtractionInput,
+    ResumeExtractionStreamCallbacks,
     ResumeStore,
     ResumeUploadRecord,
 } from "../ports";
@@ -22,6 +24,12 @@ import type {
     ResumeSummary,
 } from "../../shared/types";
 import { summarizeResume } from "../../shared/types";
+import {
+    collectResumeFieldTokens,
+    ResumeFieldTagParser,
+    resumeFromTokenPatch,
+    type ResumeFieldToken,
+} from "../../shared/resumeStream";
 import type {
     JobDescriptionStoreObject,
     ResumeDocumentObject,
@@ -34,129 +42,11 @@ const DEFAULT_GEMINI_RESUME_MODEL = "gemini-3.5-flash";
 const GOOGLE_AI_STUDIO_PROVIDER = "google-ai-studio";
 const MAX_RESUME_MARKDOWN_CHARS = 3_500;
 const JD_EXTRACTION_MAX_TOKENS = 2048;
-const GEMINI_RESUME_MAX_OUTPUT_TOKENS = 4096;
+const GEMINI_RESUME_MAX_OUTPUT_TOKENS = 8192;
 const RESUME_SECTION_PATTERN =
     /(?:^|\n)(?:#{1,6}\s*)?(Education|Work Experience|Open-Source Contributions|Research Experience|Projects?|Skills)\b[^\n]*(?:\n[\s\S]*?)(?=\n(?:#{1,6}\s*)?(?:Education|Work Experience|Open-Source Contributions|Research Experience|Projects?|Skills)\b|$)/gi;
 const RESUME_REGISTRY_NAME = "__resume_registry__";
 const JD_STORE_NAME = "__jd_store__";
-const RESUME_ANALYSIS_RESPONSE_SCHEMA = {
-    properties: {
-        basic: {
-            properties: {
-                email: { type: "STRING" },
-                name: { type: "STRING" },
-                phone: { type: "STRING" },
-                socialMedia: {
-                    items: {
-                        properties: {
-                            link: { type: "STRING" },
-                            name: { type: "STRING" },
-                        },
-                        required: ["name", "link"],
-                        type: "OBJECT",
-                    },
-                    type: "ARRAY",
-                },
-            },
-            required: ["name", "socialMedia"],
-            type: "OBJECT",
-        },
-        edu: {
-            items: {
-                properties: {
-                    awards: {
-                        items: {
-                            properties: {
-                                name: { type: "STRING" },
-                                value: { type: "STRING" },
-                            },
-                            required: ["name", "value"],
-                            type: "OBJECT",
-                        },
-                        type: "ARRAY",
-                    },
-                    degree: { type: "STRING" },
-                    experiences: {
-                        items: {
-                            properties: {
-                                des: { type: "STRING" },
-                            },
-                            required: ["des"],
-                            type: "OBJECT",
-                        },
-                        type: "ARRAY",
-                    },
-                    school: { type: "STRING" },
-                },
-                required: ["awards", "experiences"],
-                type: "OBJECT",
-            },
-            type: "ARRAY",
-        },
-        project: {
-            items: {
-                properties: {
-                    des: { type: "STRING" },
-                    duration: {
-                        items: { type: "STRING" },
-                        type: "ARRAY",
-                    },
-                    name: { type: "STRING" },
-                    role: {
-                        enum: ["maintainer", "contributor", "owner"],
-                        type: "STRING",
-                    },
-                    type: {
-                        enum: ["open-source", "hobby"],
-                        type: "STRING",
-                    },
-                },
-                required: ["duration"],
-                type: "OBJECT",
-            },
-            type: "ARRAY",
-        },
-        rawText: { type: "STRING" },
-        skills: {
-            items: {
-                properties: {
-                    des: { type: "STRING" },
-                    name: { type: "STRING" },
-                },
-                required: ["name"],
-                type: "OBJECT",
-            },
-            type: "ARRAY",
-        },
-        work: {
-            items: {
-                properties: {
-                    company: { type: "STRING" },
-                    des: { type: "STRING" },
-                    duration: {
-                        items: { type: "STRING" },
-                        type: "ARRAY",
-                    },
-                    level: { type: "STRING" },
-                    location: {
-                        enum: ["hybrid", "remote", "on-site"],
-                        type: "STRING",
-                    },
-                    role: { type: "STRING" },
-                    type: {
-                        enum: ["intern", "full-time"],
-                        type: "STRING",
-                    },
-                },
-                required: ["duration"],
-                type: "OBJECT",
-            },
-            type: "ARRAY",
-        },
-    },
-    required: ["rawText", "basic", "edu", "work", "project", "skills"],
-    type: "OBJECT",
-} as const;
 
 export type CloudflareEnv = Env & {
     AI: Ai;
@@ -371,12 +261,29 @@ class WorkersAiExtractor implements AiExtractor {
     ) {}
 
     async extractResume(input: ResumeExtractionInput): Promise<ResumeAnalysis> {
-        const markdown = await this.pdfToMarkdown(input);
-        const response = await this.runGeminiResumePrompt(
-            resumePrompt(input, markdown),
-        );
+        return this.extractResumeStream(input, {});
+    }
 
-        return parseResumeAnalysis(normalizeResumeAnalysis(response));
+    async extractResumeStream(
+        input: ResumeExtractionInput,
+        callbacks: ResumeExtractionStreamCallbacks,
+    ): Promise<ResumeAnalysis> {
+        await callbacks.onStatus?.({
+            message: "Converting PDF to markdown",
+            phase: "converting_pdf_to_markdown",
+        });
+        const markdown = await this.pdfToMarkdown(input);
+        await callbacks.onStatus?.({
+            message: "Extracting content from markdown",
+            phase: "extracting_content_from_markdown",
+        });
+        const tokens = await this.runGeminiResumeStreamPrompt(
+            resumeStreamPrompt(input, markdown),
+            callbacks,
+        );
+        const resume = resumeFromTokenPatch(collectResumeFieldTokens(tokens));
+
+        return parseResumeAnalysis(normalizeResumeAnalysis(resume));
     }
 
     async analyzeJobDescription(rawText: string): Promise<JobDescription> {
@@ -491,7 +398,10 @@ class WorkersAiExtractor implements AiExtractor {
         }
     }
 
-    private async runGeminiResumePrompt(content: string): Promise<unknown> {
+    private async runGeminiResumeStreamPrompt(
+        content: string,
+        callbacks: ResumeExtractionStreamCallbacks,
+    ): Promise<ResumeFieldToken[]> {
         if (!this.gatewayId) {
             throw new Error(
                 "AI Gateway name is required for resume extraction",
@@ -499,12 +409,16 @@ class WorkersAiExtractor implements AiExtractor {
         }
 
         const startedAt = Date.now();
-        const endpoint = `v1beta/models/${this.geminiResumeModel}:generateContent`;
+        const endpoint = `v1beta/models/${this.geminiResumeModel}:streamGenerateContent?alt=sse`;
+        const parser = new ResumeFieldTagParser();
+        const tokens: ResumeFieldToken[] = [];
+        let chunkCount = 0;
+        let tokenCount = 0;
         let response: Response;
 
         console.info("resume-ai", {
             endpoint,
-            event: "gateway:model:start",
+            event: "gateway:model:stream:start",
             gatewayId: this.gatewayId,
             maxOutputTokens: GEMINI_RESUME_MAX_OUTPUT_TOKENS,
             model: this.geminiResumeModel,
@@ -530,18 +444,16 @@ class WorkersAiExtractor implements AiExtractor {
                         ],
                         generationConfig: {
                             maxOutputTokens: GEMINI_RESUME_MAX_OUTPUT_TOKENS,
-                            responseMimeType: "application/json",
-                            responseSchema: RESUME_ANALYSIS_RESPONSE_SCHEMA,
                             temperature: 0,
                         },
                     },
                 },
                 {
                     gateway: {
-                        cacheTtl: 3600,
+                        cacheTtl: 0,
                         collectLog: true,
                         id: this.gatewayId,
-                        skipCache: false,
+                        skipCache: true,
                     },
                 },
             );
@@ -550,66 +462,75 @@ class WorkersAiExtractor implements AiExtractor {
                 durationMs: elapsed(startedAt),
                 endpoint,
                 error: errorMessage(error),
-                event: "gateway:model:failed",
+                event: "gateway:model:stream:failed",
                 gatewayId: this.gatewayId,
                 model: this.geminiResumeModel,
                 provider: GOOGLE_AI_STUDIO_PROVIDER,
                 task: "resume",
             });
             throw new Error(
-                `${this.geminiResumeModel} extraction failed: ${errorMessage(error)}`,
+                `${this.geminiResumeModel} stream extraction failed: ${errorMessage(error)}`,
                 { cause: error },
             );
         }
 
-        const responseText = await response.text();
-
-        console.info("resume-ai", {
-            durationMs: elapsed(startedAt),
-            endpoint,
-            event: "gateway:model:response",
-            gatewayId: this.gatewayId,
-            model: this.geminiResumeModel,
-            provider: GOOGLE_AI_STUDIO_PROVIDER,
-            responseChars: responseText.length,
-            responsePreview: previewText(responseText),
-            status: response.status,
-            task: "resume",
-        });
-
         if (!response.ok) {
+            const responseText = await response.text();
+
             throw new Error(
-                `${this.geminiResumeModel} extraction failed with HTTP ${response.status}: ${previewText(responseText)}`,
+                `${this.geminiResumeModel} stream extraction failed with HTTP ${response.status}: ${previewText(responseText)}`,
             );
         }
 
         try {
-            const payload = JSON.parse(responseText) as unknown;
-            const text = readGeminiText(payload);
+            await readGeminiSseText(response, async (text) => {
+                chunkCount += 1;
 
-            if (!text) {
-                throw new Error("Gemini response did not include text content");
-            }
-
-            return parseAiJson(text);
+                for (const token of parser.push(text)) {
+                    tokenCount += 1;
+                    tokens.push(token);
+                    await callbacks.onToken?.(token);
+                }
+            });
+            parser.flush();
         } catch (error) {
             console.error("resume-ai", {
+                chunkCount,
                 durationMs: elapsed(startedAt),
                 endpoint,
                 error: errorMessage(error),
-                event: "gateway:model:parse-failed",
+                event: "gateway:model:stream:parse-failed",
                 gatewayId: this.gatewayId,
                 model: this.geminiResumeModel,
                 provider: GOOGLE_AI_STUDIO_PROVIDER,
-                responseChars: responseText.length,
-                responsePreview: previewText(responseText),
                 task: "resume",
+                tokenCount,
             });
             throw new Error(
-                `${this.geminiResumeModel} returned invalid JSON: ${errorMessage(error)}`,
+                `${this.geminiResumeModel} returned an invalid resume stream: ${errorMessage(error)}`,
                 { cause: error },
             );
         }
+
+        if (tokens.length === 0) {
+            throw new Error(
+                `${this.geminiResumeModel} returned no complete resume field tags`,
+            );
+        }
+
+        console.info("resume-ai", {
+            chunkCount,
+            durationMs: elapsed(startedAt),
+            endpoint,
+            event: "gateway:model:stream:complete",
+            gatewayId: this.gatewayId,
+            model: this.geminiResumeModel,
+            provider: GOOGLE_AI_STUDIO_PROVIDER,
+            task: "resume",
+            tokenCount,
+        });
+
+        return tokens;
     }
 
     private async pdfToMarkdown(input: ResumeExtractionInput): Promise<string> {
@@ -681,20 +602,37 @@ class WorkersAiExtractor implements AiExtractor {
     }
 }
 
-function resumePrompt(input: ResumeExtractionInput, markdown: string): string {
-    return `Extract this PDF resume text into concise JSON with keys rawText, basic, edu, work, project, skills.
-Schema:
-{
-  "rawText": "string, <=600 chars summary/source excerpt, not the full resume",
-  "basic": {"name": "string", "email": "string", "phone": "string", "socialMedia": [{"name": "string", "link": "string"}]},
-  "edu": [{"school": "string", "degree": "string", "awards": [{"name": "string", "value": "string"}], "experiences": [{"des": "string"}]}],
-  "work": [{"company": "string", "duration": ["ISO date"], "type": "intern|full-time", "location": "hybrid|remote|on-site", "level": "string", "role": "string", "des": "string"}],
-  "project": [{"name": "string", "duration": ["ISO date"], "type": "open-source|hobby", "role": "maintainer|contributor|owner", "des": "string"}],
-  "skills": [{"name": "string", "des": "string"}]
-}
-Missing non-enum string fields must become empty strings. Missing arrays must become empty arrays.
-When work.type, work.location, project.type, or project.role is unknown, omit that field instead of returning an empty string.
-Keep descriptions under 180 chars and skills under 80 chars. Return only valid minified JSON.
+function resumeStreamPrompt(
+    input: ResumeExtractionInput,
+    markdown: string,
+): string {
+    return `Extract this PDF resume text into flat XML-style field tags for streaming display.
+Return only tags. Do not return JSON, markdown fences, comments, explanations, or binary content.
+Each complete tag must be independent and use the same opening and closing path:
+<basic.name>Ava Chen</basic.name>
+<edu.0.school>National University</edu.0.school>
+<work.0.duration.0>2020-01-01</work.0.duration.0>
+
+Use zero-based numeric path segments for arrays. Numeric segments create array items.
+Allowed top-level paths: rawText, basic, edu, work, project, skills.
+Use these fields:
+- rawText
+- basic.name, basic.email, basic.phone, basic.socialMedia.N.name, basic.socialMedia.N.link
+- edu.N.school, edu.N.degree, edu.N.awards.N.name, edu.N.awards.N.value, edu.N.experiences.N.des
+- work.N.company, work.N.duration.N, work.N.type, work.N.location, work.N.level, work.N.role, work.N.des
+- project.N.name, project.N.duration.N, project.N.type, project.N.role, project.N.des
+- skills.N.name, skills.N.des
+
+Rules:
+- Prefer concise values. Keep rawText under 600 chars and descriptions under 180 chars.
+- Use ISO-like dates for duration values when possible.
+- For work.type use only intern or full-time. Omit it if unknown.
+- For work.location use only hybrid, remote, or on-site. Omit it if unknown.
+- For project.type use only open-source or hobby. Omit it if unknown.
+- For project.role use only maintainer, contributor, or owner. Omit it if unknown.
+- Escape literal <, >, &, ", and ' inside values as XML entities.
+- Emit each known value exactly once.
+
 File name: ${input.fileName}
 Upload source: ${input.source}
 Markdown resume excerpt:
@@ -810,6 +748,111 @@ function readGeminiText(response: unknown): string {
     }
 
     return "";
+}
+
+async function readGeminiSseText(
+    response: Response,
+    onText: (text: string) => Promise<void>,
+): Promise<void> {
+    const reader = response.body?.getReader();
+
+    if (!reader) {
+        await readNonSseGeminiText(await response.text(), onText);
+        return;
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let rawText = "";
+    let eventCount = 0;
+
+    while (true) {
+        const { done, value } = await reader.read();
+        const text = decoder.decode(value, { stream: !done });
+
+        rawText += text;
+        buffer = normalizeLineEndings(buffer + text);
+
+        let separatorIndex = buffer.indexOf("\n\n");
+
+        while (separatorIndex >= 0) {
+            const rawEvent = buffer.slice(0, separatorIndex);
+            buffer = buffer.slice(separatorIndex + 2);
+            eventCount += await readGeminiSseEvent(rawEvent, onText);
+            separatorIndex = buffer.indexOf("\n\n");
+        }
+
+        if (done) {
+            break;
+        }
+    }
+
+    if (buffer.trim()) {
+        eventCount += await readGeminiSseEvent(buffer, onText);
+    }
+
+    if (eventCount === 0 && rawText.trim()) {
+        await readNonSseGeminiText(rawText, onText);
+    }
+}
+
+async function readGeminiSseEvent(
+    rawEvent: string,
+    onText: (text: string) => Promise<void>,
+): Promise<number> {
+    const data = rawEvent
+        .split("\n")
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice("data:".length).trimStart())
+        .join("\n")
+        .trim();
+
+    if (!data) {
+        return 0;
+    }
+
+    if (data === "[DONE]") {
+        return 1;
+    }
+
+    const payload = JSON.parse(data) as unknown;
+    const text = readGeminiText(payload);
+
+    if (text) {
+        await onText(text);
+    }
+
+    return 1;
+}
+
+async function readNonSseGeminiText(
+    rawText: string,
+    onText: (text: string) => Promise<void>,
+): Promise<void> {
+    const trimmed = rawText.trim();
+
+    if (!trimmed) {
+        return;
+    }
+
+    try {
+        const payload = JSON.parse(trimmed) as unknown;
+        const values = Array.isArray(payload) ? payload : [payload];
+
+        for (const value of values) {
+            const text = readGeminiText(value);
+
+            if (text) {
+                await onText(text);
+            }
+        }
+    } catch {
+        await onText(trimmed);
+    }
+}
+
+function normalizeLineEndings(value: string): string {
+    return value.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 }
 
 function readDirectJson(

@@ -3,9 +3,11 @@ import { describe, expect, it } from "vitest";
 import { createApiApp } from "../../src/backend/expressApp";
 import { createTestServices } from "../../src/backend/testImpl";
 import {
+    parseResumeInfoResult,
     parseResumeStatusResult,
     parseResumeUploadResult,
 } from "../../src/shared/schemas";
+import type { ResumeStreamEvent } from "../../src/shared/resumeStream";
 import { pdfWithPages } from "../fixtures/pdf";
 
 const uuidV7Pattern =
@@ -86,6 +88,96 @@ describe("resume and JD API behavior", () => {
         expect(response.body.error).toMatch(/3 pages or fewer/i);
     });
 
+    it("streams resume analysis status, field tokens, completion, and stored ready data", async () => {
+        const services = createTestServices();
+        const app = createApiApp(services);
+
+        const response = await request(app)
+            .post("/api/resumes/analyze/stream")
+            .set("accept", "text/event-stream")
+            .set("content-type", "application/pdf")
+            .set("x-file-name", "ava-chen.pdf")
+            .set("x-upload-source", "click")
+            .send(pdfWithPages(1, "Ava Chen resume"));
+
+        expect(response.status).toBe(200);
+        expect(response.headers["content-type"]).toContain("text/event-stream");
+
+        const events = parseSseEvents(response.text);
+
+        expect(events.map((event) => event.type)).toContain("status");
+        expect(
+            events.find(
+                (event) =>
+                    event.type === "status" &&
+                    event.phase === "converting_pdf_to_markdown",
+            ),
+        ).toMatchObject({
+            message: "Converting PDF to markdown",
+        });
+        expect(
+            events.find(
+                (event) =>
+                    event.type === "token" && event.path === "basic.name",
+            ),
+        ).toMatchObject({
+            value: "Ava Chen",
+        });
+
+        const complete = events.find(
+            (
+                event,
+            ): event is Extract<ResumeStreamEvent, { type: "complete" }> =>
+                event.type === "complete",
+        );
+
+        expect(complete?.resumeId).toMatch(uuidV7Pattern);
+        expect(complete?.resume.basic.name).toBe("Ava Chen");
+
+        const detail = await request(app).get(
+            `/api/resumes/${complete?.resumeId ?? ""}`,
+        );
+        expect(detail.status).toBe(200);
+        expect(parseResumeInfoResult(detail.body).resume.basic.name).toBe(
+            "Ava Chen",
+        );
+    });
+
+    it("streams proper error events and marks the upload failed when extraction fails", async () => {
+        const services = createTestServices({
+            onExtractResume: () => {
+                throw new Error("Model unavailable");
+            },
+        });
+        const app = createApiApp(services);
+
+        const response = await request(app)
+            .post("/api/resumes/analyze/stream")
+            .set("accept", "text/event-stream")
+            .set("content-type", "application/pdf")
+            .set("x-file-name", "ava-chen.pdf")
+            .set("x-upload-source", "click")
+            .send(pdfWithPages(1, "Ava Chen resume"));
+
+        expect(response.status).toBe(200);
+
+        const events = parseSseEvents(response.text);
+        const error = events.find(
+            (event): event is Extract<ResumeStreamEvent, { type: "error" }> =>
+                event.type === "error",
+        );
+
+        expect(error?.message).toMatch(/model unavailable/i);
+
+        const resumeId = services.resumeAnalysisQueue.jobs[0]?.resumeId;
+        expect(resumeId).toBeUndefined();
+        const failedSummary = [...services.resumeStore.summaries.values()][0];
+
+        expect(failedSummary).toMatchObject({
+            status: "failed",
+        });
+    });
+
     it("stores analyzed job descriptions and lists their structured summaries", async () => {
         const services = createTestServices();
         const app = createApiApp(services);
@@ -130,3 +222,18 @@ describe("resume and JD API behavior", () => {
         expect(duplicate.body.error).toMatch(/already exists/i);
     });
 });
+
+function parseSseEvents(text: string): ResumeStreamEvent[] {
+    return text
+        .split(/\n\n+/)
+        .map((event) =>
+            event
+                .split("\n")
+                .filter((line) => line.startsWith("data:"))
+                .map((line) => line.slice("data:".length).trimStart())
+                .join("\n")
+                .trim(),
+        )
+        .filter(Boolean)
+        .map((data) => JSON.parse(data) as ResumeStreamEvent);
+}

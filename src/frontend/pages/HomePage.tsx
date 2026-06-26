@@ -2,6 +2,7 @@ import { siGoogledocs } from "simple-icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSWRConfig } from "swr";
 import type { ApiClient, UploadSource } from "../apiClient";
+import type { ExtractionStatusMessage, ExtractionToken } from "../appMachine";
 import { useAppRuntime } from "../appRuntime";
 import { SimpleIcon } from "../components/SimpleIcon";
 
@@ -16,12 +17,14 @@ export function HomePage({ apiClient }: HomePageProps) {
     const { send, state } = useAppRuntime();
     const upload = state.context.upload;
     const hasSelectedFile = Boolean(previewUrl);
-    const showExtractionSkeleton =
+    const showExtractionPreview =
         hasSelectedFile &&
         upload.status !== "idle" &&
         upload.status !== "error" &&
         upload.status !== "done";
     const showProgressBar = upload.status === "uploading";
+    const latestStreamMessage =
+        state.context.extraction.messages.at(-1)?.message;
 
     useEffect(() => {
         return () => {
@@ -51,11 +54,11 @@ export function HomePage({ apiClient }: HomePageProps) {
         }
 
         if (upload.status === "analyzing") {
-            return "Analyzing resume";
+            return latestStreamMessage ?? "Analyzing resume";
         }
 
         return "";
-    }, [upload.status]);
+    }, [latestStreamMessage, upload.status]);
 
     async function handleFile(file: File, source: UploadSource): Promise<void> {
         if (!isPdf(file)) {
@@ -71,25 +74,34 @@ export function HomePage({ apiClient }: HomePageProps) {
         send({ fileName: file.name, source, type: "UPLOAD_STARTED" });
 
         try {
-            const result = await apiClient.uploadResume(
-                file,
-                source,
-                (progress) => {
+            const result = await apiClient.streamAnalyzeResume(file, source, {
+                onEvent: (event) => {
+                    if (event.type === "status") {
+                        send({
+                            message: event.message,
+                            phase: event.phase,
+                            type: "RESUME_STREAM_STATUS",
+                        });
+                        return;
+                    }
+
+                    if (event.type === "token") {
+                        send({
+                            path: event.path,
+                            type: "RESUME_STREAM_TOKEN",
+                            value: event.value,
+                        });
+                    }
+                },
+                onProgress: (progress) => {
                     send({ progress, type: "UPLOAD_PROGRESS" });
                 },
-            );
-
-            send({
-                bytes: result.upload.bytes,
-                source,
-                type: "UPLOAD_ACCEPTED",
             });
 
-            await waitForResumeReady(apiClient, result.resumeId);
             await mutate("resumes.nav-count");
             await mutate("resumes.table");
             send({
-                bytes: result.upload.bytes,
+                bytes: file.size,
                 resumeId: result.resumeId,
                 source,
                 type: "UPLOAD_DONE",
@@ -133,12 +145,12 @@ export function HomePage({ apiClient }: HomePageProps) {
                 type="file"
             />
             <button
+                aria-label="Resume PDF upload area"
                 className={
                     hasSelectedFile
                         ? "pdf-preview card mx-auto w-full max-w-2xl cursor-pointer border-2 border-dashed border-info bg-base-100 shadow-2xl transition focus:outline-none focus:ring-2 focus:ring-info focus:ring-offset-2 focus:ring-offset-base-200 lg:justify-self-center"
                         : "pdf-preview card w-full max-w-3xl cursor-pointer border-2 border-dashed border-info bg-base-100 shadow-2xl transition focus:outline-none focus:ring-2 focus:ring-info focus:ring-offset-2 focus:ring-offset-base-200"
                 }
-                aria-label="Resume PDF upload area"
                 data-testid="resume-dropzone"
                 onClick={openFilePicker}
                 onDragOver={(event) => event.preventDefault()}
@@ -192,12 +204,29 @@ export function HomePage({ apiClient }: HomePageProps) {
                     ) : null}
                 </div>
             </button>
-            {showExtractionSkeleton ? <ExtractionSkeleton /> : null}
+            {showExtractionPreview ? (
+                <ExtractionStreamPreview
+                    fileName={upload.fileName ?? "resume.pdf"}
+                    messages={state.context.extraction.messages}
+                    progressText={progressText}
+                    tokens={state.context.extraction.tokens}
+                />
+            ) : null}
         </section>
     );
 }
 
-function ExtractionSkeleton() {
+function ExtractionStreamPreview({
+    fileName,
+    messages,
+    progressText,
+    tokens,
+}: {
+    fileName: string;
+    messages: ExtractionStatusMessage[];
+    progressText: string;
+    tokens: ExtractionToken[];
+}) {
     return (
         <aside
             aria-busy="true"
@@ -207,70 +236,69 @@ function ExtractionSkeleton() {
         >
             <div className="rounded border border-base-300 bg-base-100 p-6 shadow-xl">
                 <div className="flex items-center justify-between gap-4">
-                    <div className="skeleton h-8 w-1/2" />
+                    <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-base-content/70">
+                            {fileName}
+                        </p>
+                        <h2 className="mt-1 text-xl font-semibold">
+                            Extracting resume
+                        </h2>
+                    </div>
                     <div className="loading loading-spinner loading-md text-info" />
                 </div>
-                <div className="mt-6 space-y-5">
-                    <div className="space-y-2">
-                        <div className="skeleton h-5 w-1/3" />
-                        <div className="skeleton h-4 w-full" />
-                        <div className="skeleton h-4 w-5/6" />
-                    </div>
-                    <div className="grid gap-3 sm:grid-cols-2">
-                        <div className="skeleton h-24 w-full" />
-                        <div className="skeleton h-24 w-full" />
-                    </div>
-                    <div className="space-y-2">
-                        <div className="skeleton h-4 w-2/3" />
-                        <div className="skeleton h-4 w-full" />
-                        <div className="skeleton h-4 w-4/5" />
-                        <div className="skeleton h-4 w-3/5" />
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                        <div className="skeleton h-7 w-20 rounded-full" />
-                        <div className="skeleton h-7 w-24 rounded-full" />
-                        <div className="skeleton h-7 w-16 rounded-full" />
-                    </div>
+                <p className="mt-3 text-sm text-base-content/70">
+                    {progressText}
+                </p>
+                <div className="mt-5 space-y-3">
+                    {messages.length > 0 ? (
+                        messages.map((message, index) => (
+                            <div
+                                className="flex items-center gap-3 rounded border border-base-300 bg-base-200/60 px-3 py-2 text-sm"
+                                key={`${message.phase}-${index}`}
+                            >
+                                <span className="loading loading-spinner loading-xs text-info" />
+                                <span>{message.message}</span>
+                            </div>
+                        ))
+                    ) : (
+                        <div className="space-y-2">
+                            <div className="skeleton h-4 w-2/3" />
+                            <div className="skeleton h-4 w-full" />
+                        </div>
+                    )}
+                </div>
+                <div className="mt-5 max-h-80 overflow-y-auto rounded border border-base-300 bg-base-200/60">
+                    {tokens.length > 0 ? (
+                        <ul className="divide-y divide-base-300">
+                            {tokens.map((token, index) => (
+                                <li
+                                    aria-label={`${token.path} assigned ${token.value}`}
+                                    className="min-w-0 px-3 py-2 font-mono text-xs leading-5 break-words text-base-content/80"
+                                    key={`${token.path}-${index}`}
+                                >
+                                    {latexAssignment(token)}
+                                </li>
+                            ))}
+                        </ul>
+                    ) : (
+                        <div className="space-y-2 p-3">
+                            <div className="skeleton h-4 w-3/4" />
+                            <div className="skeleton h-4 w-full" />
+                            <div className="skeleton h-4 w-5/6" />
+                        </div>
+                    )}
                 </div>
             </div>
         </aside>
     );
 }
 
-async function waitForResumeReady(
-    apiClient: ApiClient,
-    resumeId: string,
-): Promise<void> {
-    const timeoutMs = 120_000;
-
-    await pollResumeStatus(apiClient, resumeId, Date.now() + timeoutMs);
+function latexAssignment(token: ExtractionToken): string {
+    return `\\(\\mathrm{${escapeLatex(token.path)}} \\leftarrow \\text{${escapeLatex(token.value)}}\\)`;
 }
 
-async function pollResumeStatus(
-    apiClient: ApiClient,
-    resumeId: string,
-    deadline: number,
-): Promise<void> {
-    if (Date.now() >= deadline) {
-        throw new Error("Resume analysis is still running");
-    }
-
-    const status = await apiClient.getResumeStatus(resumeId);
-
-    if (status.status === "ready") {
-        return;
-    }
-
-    if (status.status === "failed") {
-        throw new Error("Resume analysis failed");
-    }
-
-    await delay(2_000);
-    await pollResumeStatus(apiClient, resumeId, deadline);
-}
-
-function delay(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+function escapeLatex(value: string): string {
+    return value.replace(/[\\{}_$&#%]/g, (char) => `\\${char}`);
 }
 
 function isPdf(file: File): boolean {

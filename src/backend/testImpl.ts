@@ -1,3 +1,4 @@
+/* oxlint-disable no-await-in-loop -- fixture stream callbacks intentionally preserve token order. */
 import type {
     AiExtractor,
     AppServices,
@@ -5,6 +6,7 @@ import type {
     PendingResumeUpload,
     ResumeAnalysisJob,
     ResumeExtractionInput,
+    ResumeExtractionStreamCallbacks,
     ResumeAnalysisQueue,
     ResumeStore,
     ResumeUploadRecord,
@@ -21,6 +23,7 @@ import type {
     ResumeSummary,
 } from "../shared/types";
 import { summarizeResume } from "../shared/types";
+import { resumeAnalysisToFieldTokens } from "../shared/resumeStream";
 
 const fixtureResume: ResumeAnalysis = {
     rawText:
@@ -278,6 +281,28 @@ class TestAiExtractor implements AiExtractor {
         this.options.onExtractResume?.(input);
 
         return this.options.resume ?? fixtureResume;
+    }
+
+    async extractResumeStream(
+        input: ResumeExtractionInput,
+        callbacks: ResumeExtractionStreamCallbacks,
+    ): Promise<ResumeAnalysis> {
+        await callbacks.onStatus?.({
+            message: "Converting PDF to markdown",
+            phase: "converting_pdf_to_markdown",
+        });
+        const resume = await this.extractResume(input);
+
+        await callbacks.onStatus?.({
+            message: "Extracting content from markdown",
+            phase: "extracting_content_from_markdown",
+        });
+
+        for (const token of resumeAnalysisToFieldTokens(resume)) {
+            await callbacks.onToken?.(token);
+        }
+
+        return resume;
     }
 
     async analyzeJobDescription(rawText: string): Promise<JobDescription> {

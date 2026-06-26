@@ -1,3 +1,4 @@
+/* oxlint-disable no-await-in-loop -- SSE readers must process events in arrival order. */
 import type {
     JdAnalyzeResult,
     JdInfoResult,
@@ -8,10 +9,15 @@ import type {
     ResumeUploadResult,
     UploadSource,
 } from "../shared/types";
+import type {
+    ResumeStreamEvent,
+    ResumeTokenPatch,
+} from "../shared/resumeStream";
 import {
     parseJdAnalyzeResult,
     parseJdInfoResult,
     parseJdListResult,
+    parseResumeAnalysis,
     parseResumeInfoResult,
     parseResumeListResult,
     parseResumeStatusResult,
@@ -26,12 +32,27 @@ export type UploadProgress = {
     total: number;
 };
 
+export type ResumeStreamCompleteEvent = Extract<
+    ResumeStreamEvent,
+    { type: "complete" }
+>;
+
+export type ResumeStreamHandlers = {
+    onEvent: (event: ResumeStreamEvent) => void;
+    onProgress: (progress: UploadProgress) => void;
+};
+
 export interface ApiClient {
     uploadResume(
         file: File,
         source: UploadSource,
         onProgress: (progress: UploadProgress) => void,
     ): Promise<ResumeUploadResult>;
+    streamAnalyzeResume(
+        file: File,
+        source: UploadSource,
+        handlers: ResumeStreamHandlers,
+    ): Promise<ResumeStreamCompleteEvent>;
     archiveResume(resumeId: string): Promise<void>;
     listResumes(): Promise<ResumeListResult>;
     getResumeInfo(resumeId: string): Promise<ResumeInfoResult>;
@@ -76,6 +97,60 @@ export const browserApiClient: ApiClient = {
             });
             xhr.send(file);
         });
+    },
+    async streamAnalyzeResume(file, source, handlers) {
+        const response = await fetch("/api/resumes/analyze/stream", {
+            body: file,
+            headers: {
+                "content-type": "application/pdf",
+                "x-file-name": file.name,
+                "x-upload-source": source,
+            },
+            method: "POST",
+        });
+
+        handlers.onProgress({
+            loaded: file.size,
+            percent: 100,
+            total: file.size,
+        });
+
+        if (!response.ok) {
+            const payload = await response.json().catch(() => ({}));
+
+            throw new Error(readError(payload) ?? "Upload failed");
+        }
+
+        if (!response.body) {
+            throw new Error("Resume analysis stream is unavailable");
+        }
+
+        let complete: ResumeStreamCompleteEvent | undefined;
+        let streamError: Error | undefined;
+
+        await readSseStream(response.body, (payload) => {
+            const event = parseResumeStreamEvent(payload);
+
+            handlers.onEvent(event);
+
+            if (event.type === "complete") {
+                complete = event;
+            }
+
+            if (event.type === "error") {
+                streamError = new Error(event.message);
+            }
+        });
+
+        if (streamError) {
+            throw streamError;
+        }
+
+        if (!complete) {
+            throw new Error("Resume analysis stream ended before completion");
+        }
+
+        return complete;
     },
     async listResumes() {
         return parseResumeListResult(await getJson("/api/resumes"));
@@ -173,4 +248,127 @@ function readError(payload: unknown): string | undefined {
     }
 
     return undefined;
+}
+
+async function readSseStream(
+    stream: ReadableStream<Uint8Array>,
+    onEvent: (payload: unknown) => void,
+): Promise<void> {
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+        const { done, value } = await reader.read();
+        buffer = normalizeLineEndings(
+            buffer + decoder.decode(value, { stream: !done }),
+        );
+
+        let separatorIndex = buffer.indexOf("\n\n");
+
+        while (separatorIndex >= 0) {
+            const rawEvent = buffer.slice(0, separatorIndex);
+            buffer = buffer.slice(separatorIndex + 2);
+            readSseEvent(rawEvent, onEvent);
+            separatorIndex = buffer.indexOf("\n\n");
+        }
+
+        if (done) {
+            break;
+        }
+    }
+
+    if (buffer.trim()) {
+        readSseEvent(buffer, onEvent);
+    }
+}
+
+function readSseEvent(
+    rawEvent: string,
+    onEvent: (payload: unknown) => void,
+): void {
+    const data = rawEvent
+        .split("\n")
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice("data:".length).trimStart())
+        .join("\n")
+        .trim();
+
+    if (!data || data === "[DONE]") {
+        return;
+    }
+
+    onEvent(JSON.parse(data) as unknown);
+}
+
+function parseResumeStreamEvent(payload: unknown): ResumeStreamEvent {
+    const record = asRecord(payload);
+
+    if (!record) {
+        throw new Error("Invalid resume analysis stream event");
+    }
+
+    const type = record?.type;
+
+    if (type === "status") {
+        const phase = record.phase;
+        const message = record.message;
+
+        if (
+            (phase === "converting_pdf_to_markdown" ||
+                phase === "extracting_content_from_markdown" ||
+                phase === "saving_resume") &&
+            typeof message === "string"
+        ) {
+            return {
+                message,
+                phase,
+                type,
+            };
+        }
+    }
+
+    if (
+        type === "token" &&
+        typeof record?.path === "string" &&
+        typeof record?.value === "string"
+    ) {
+        return {
+            path: record.path,
+            patch: record.patch as ResumeTokenPatch,
+            type,
+            value: record.value,
+        };
+    }
+
+    if (
+        type === "complete" &&
+        typeof record?.resumeId === "string" &&
+        record?.resume
+    ) {
+        return {
+            resume: parseResumeAnalysis(record.resume),
+            resumeId: record.resumeId,
+            type,
+        };
+    }
+
+    if (type === "error" && typeof record?.message === "string") {
+        return {
+            message: record.message,
+            type,
+        };
+    }
+
+    throw new Error("Invalid resume analysis stream event");
+}
+
+function normalizeLineEndings(value: string): string {
+    return value.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+    return value && typeof value === "object"
+        ? (value as Record<string, unknown>)
+        : undefined;
 }
