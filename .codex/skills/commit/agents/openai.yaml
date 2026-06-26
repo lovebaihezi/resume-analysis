@@ -1,0 +1,4 @@
+interface:
+  display_name: "Commit"
+  short_description: "Commit, push, PR, and CI workflow"
+  default_prompt: "Use $commit to commit my changes, open a PR, and monitor checks."
