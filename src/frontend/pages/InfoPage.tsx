@@ -9,11 +9,15 @@ type InfoPageProps = {
 
 export function InfoPage({ apiClient }: InfoPageProps) {
     const params = useParams();
-    const name = params.name ? decodeURIComponent(params.name) : "";
+    // TODO(live-edit): Replace this static fetch with a resumeId-keyed document
+    // session. Needed here: load the latest saved resume document, attach a Loro
+    // snapshot/op-log stream, and use a prototype actor id until product auth is
+    // chosen.
+    const resumeId = params.resumeId ? decodeURIComponent(params.resumeId) : "";
     const { state } = useAppRuntime();
     const { data, error, isLoading } = useSWR(
-        name ? ["resume.info", name] : null,
-        ([, resumeName]) => apiClient.getResumeInfo(resumeName),
+        resumeId ? ["resume.info", resumeId] : null,
+        ([, id]) => apiClient.getResumeInfo(id),
     );
 
     if (isLoading) {

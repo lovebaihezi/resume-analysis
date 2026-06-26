@@ -1,6 +1,7 @@
 import express from "express";
 import { createServer as createViteServer } from "vite";
 import { createApiApp } from "../backend/expressApp";
+import { processResumeAnalysisJob } from "../backend/resumeJobs";
 import { createTestServices } from "../backend/testImpl";
 
 const port = Number(process.env.PORT ?? 5173);
@@ -14,7 +15,18 @@ async function main(): Promise<void> {
         },
     });
 
-    app.use(createApiApp(createTestServices()));
+    const services = createTestServices();
+    const enqueue = services.resumeAnalysisQueue.enqueue.bind(
+        services.resumeAnalysisQueue,
+    );
+    services.resumeAnalysisQueue.enqueue = async (job) => {
+        await enqueue(job);
+        queueMicrotask(() => {
+            void processResumeAnalysisJob(services, job);
+        });
+    };
+
+    app.use(createApiApp(services));
     app.use(vite.middlewares);
 
     app.listen(port, () => {

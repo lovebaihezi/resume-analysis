@@ -2,81 +2,163 @@ import type {
     AiExtractor,
     AppServices,
     JobDescriptionStore,
+    PendingResumeUpload,
+    ResumeAnalysisJob,
+    ResumeAnalysisQueue,
     ResumeExtractionInput,
     ResumeStore,
+    ResumeUploadRecord,
 } from "../ports";
-import type { JobDescription, ResumeAnalysis } from "../../shared/types";
-import { resumeWriterKey } from "../../shared/types";
+import { createResumeId } from "../ids";
+import type {
+    JobDescription,
+    ResumeAnalysis,
+    ResumeDocument,
+    ResumeMetadata,
+    ResumeSummary,
+} from "../../shared/types";
+import { summarizeResume } from "../../shared/types";
+import type {
+    ResumeDocumentObject,
+    ResumeRegistryObject,
+} from "./durableObjects";
 
 const KIMI_MODEL = "@cf/moonshotai/kimi-k2.6";
+const RESUME_REGISTRY_NAME = "__resume_registry__";
 
 export type CloudflareEnv = Env & {
     AI: Ai;
     AI_GATEWAY_NAME?: string;
     JD_INDEX: DurableObjectNamespace;
     JD_OBJECT: DurableObjectNamespace;
-    RESUME_INDEX: DurableObjectNamespace;
-    RESUME_OBJECT: DurableObjectNamespace;
+    RESUME_ANALYSIS_QUEUE: Queue<ResumeAnalysisJob>;
+    RESUME_DOCUMENT: DurableObjectNamespace<ResumeDocumentObject>;
+    RESUME_REGISTRY: DurableObjectNamespace<ResumeRegistryObject>;
 };
 
 export function createCloudflareServices(env: CloudflareEnv): AppServices {
     return {
         ai: new WorkersAiExtractor(env.AI, env.AI_GATEWAY_NAME),
         jdStore: new DurableObjectJdStore(env.JD_OBJECT, env.JD_INDEX),
+        resumeAnalysisQueue: new CloudflareResumeAnalysisQueue(
+            env.RESUME_ANALYSIS_QUEUE,
+        ),
         resumeStore: new DurableObjectResumeStore(
-            env.RESUME_OBJECT,
-            env.RESUME_INDEX,
+            env.RESUME_DOCUMENT,
+            env.RESUME_REGISTRY,
         ),
     };
 }
 
 class DurableObjectResumeStore implements ResumeStore {
     constructor(
-        private readonly objects: DurableObjectNamespace,
-        private readonly index: DurableObjectNamespace,
+        private readonly documents: DurableObjectNamespace<ResumeDocumentObject>,
+        private readonly registryNamespace: DurableObjectNamespace<ResumeRegistryObject>,
     ) {}
 
-    async save(resume: ResumeAnalysis): Promise<void> {
-        const name = resumeWriterKey(resume.basic.name);
+    async createPendingUpload(
+        input: ResumeExtractionInput,
+    ): Promise<ResumeUploadRecord> {
+        const now = new Date().toISOString();
+        const resumeId = createResumeId();
+        const creating: ResumeMetadata = {
+            createdAt: now,
+            resumeId,
+            status: "creating",
+            updatedAt: now,
+        };
+        const registry = this.registryNamespace.getByName(RESUME_REGISTRY_NAME);
 
-        await fetchDurable(this.objects, name, {
-            body: JSON.stringify(resume),
-            method: "PUT",
+        await registry.create(creating);
+
+        const doc = this.documents.getByName(resumeId);
+        await doc.initUpload({
+            ...creating,
+            bytes: input.bytes,
+            fileName: input.fileName,
+            source: input.source,
         });
-        await fetchDurable(this.index, "__resume_index__", {
-            body: JSON.stringify({ name }),
-            method: "PUT",
-        });
+
+        return {
+            ...creating,
+            bytes: input.bytes.byteLength,
+            fileName: input.fileName,
+            source: input.source,
+        };
     }
 
-    async getByName(name: string): Promise<ResumeAnalysis | undefined> {
-        const response = await fetchDurable(
-            this.objects,
-            resumeWriterKey(name),
-        );
+    async completePendingAnalysis(
+        resumeId: string,
+        resume: ResumeAnalysis,
+    ): Promise<ResumeDocument> {
+        const doc = this.documents.getByName(resumeId);
+        const metadata = await doc.getMetadata();
 
-        if (response.status === 404) {
-            return undefined;
+        if (!metadata) {
+            throw new Error(`Resume upload not found: ${resumeId}`);
         }
 
-        const payload = (await response.json()) as { resume: ResumeAnalysis };
+        const ready: ResumeMetadata = {
+            ...metadata,
+            status: "ready",
+            updatedAt: new Date().toISOString(),
+        };
+        const document: ResumeDocument = {
+            ...ready,
+            resume,
+        };
 
-        return payload.resume;
+        await this.registryNamespace
+            .getByName(RESUME_REGISTRY_NAME)
+            .markReady(summarizeResume(resume, ready));
+        await doc.markReady(document);
+
+        return document;
     }
 
-    async list(): Promise<ResumeAnalysis[]> {
-        const index = await readIndex(this.index, "__resume_index__");
-        const resumes = await Promise.all(
-            index.map((name) => this.getByName(name)),
-        );
+    async failPendingAnalysis(resumeId: string): Promise<void> {
+        const failedAt = new Date().toISOString();
 
-        return resumes.filter((resume): resume is ResumeAnalysis =>
-            Boolean(resume),
-        );
+        await this.documents.getByName(resumeId).markFailed(failedAt);
+        await this.registryNamespace
+            .getByName(RESUME_REGISTRY_NAME)
+            .markFailed(resumeId, failedAt);
+    }
+
+    async getById(resumeId: string): Promise<ResumeDocument | undefined> {
+        const document = await this.documents.getByName(resumeId).get();
+
+        return document?.status === "ready" ? document : undefined;
+    }
+
+    async getPendingUpload(
+        resumeId: string,
+    ): Promise<PendingResumeUpload | undefined> {
+        return this.documents.getByName(resumeId).getPendingUpload();
+    }
+
+    async getSummary(resumeId: string): Promise<ResumeSummary | undefined> {
+        return this.registryNamespace
+            .getByName(RESUME_REGISTRY_NAME)
+            .getSummary(resumeId);
+    }
+
+    async listSummaries(): Promise<ResumeSummary[]> {
+        return this.registryNamespace
+            .getByName(RESUME_REGISTRY_NAME)
+            .listSummaries();
     }
 
     async count(): Promise<number> {
-        return (await readIndex(this.index, "__resume_index__")).length;
+        return this.registryNamespace.getByName(RESUME_REGISTRY_NAME).count();
+    }
+}
+
+class CloudflareResumeAnalysisQueue implements ResumeAnalysisQueue {
+    constructor(private readonly queue: Queue<ResumeAnalysisJob>) {}
+
+    async enqueue(job: ResumeAnalysisJob): Promise<void> {
+        await this.queue.send(job);
     }
 }
 

@@ -1,7 +1,6 @@
 import useSWR from "swr";
 import type { ApiClient } from "../apiClient";
 import { AppLink } from "../routing/AppLink";
-import { resumeWriterSlug } from "../../shared/types";
 
 type ResumesPageProps = {
     apiClient: ApiClient;
@@ -36,11 +35,11 @@ export function ResumesPage({ apiClient }: ResumesPageProps) {
                     </thead>
                     <tbody>
                         {data.resumes.map((resume) => (
-                            <tr key={resume.name}>
+                            <tr key={resume.resumeId}>
                                 <td>
                                     <AppLink
                                         className="link link-info"
-                                        to={`/info/${resumeWriterSlug(resume.name)}`}
+                                        to={`/resumes/${resume.resumeId}`}
                                     >
                                         {resume.name}
                                     </AppLink>

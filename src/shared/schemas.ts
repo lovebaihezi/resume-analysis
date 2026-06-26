@@ -4,6 +4,7 @@ import type {
     JdListResult,
     ResumeInfoResult,
     ResumeListResult,
+    ResumeStatusResult,
     ResumeUploadResult,
 } from "./types";
 
@@ -59,8 +60,15 @@ const resumeAnalysis = arkType({
     skills: skill.array(),
 });
 
+const resumeStatus = "'creating' | 'ready' | 'failed' | 'archived'";
+
 const resumeSummary = arkType({
+    "archivedAt?": "string",
+    createdAt: "string",
     name: "string",
+    resumeId: "string",
+    status: resumeStatus,
+    updatedAt: "string",
     workDuration: "string",
     highestEducation: "string",
     skills: "string[]",
@@ -77,7 +85,11 @@ const jobDescription = arkType({
 });
 
 export const resumeUploadResultSchema = arkType({
-    resume: resumeAnalysis,
+    "archivedAt?": "string",
+    createdAt: "string",
+    resumeId: "string",
+    status: resumeStatus,
+    updatedAt: "string",
     upload: {
         bytes: "number",
         percent: "number",
@@ -91,8 +103,15 @@ export const resumeListResultSchema = arkType({
 });
 
 export const resumeInfoResultSchema = arkType({
+    "archivedAt?": "string",
+    createdAt: "string",
+    resumeId: "string",
+    status: resumeStatus,
+    updatedAt: "string",
     resume: resumeAnalysis,
 });
+
+export const resumeStatusResultSchema = resumeSummary;
 
 export const jdAnalyzeResultSchema = arkType({
     jd: jobDescription,
@@ -113,6 +132,10 @@ export function parseResumeListResult(data: unknown): ResumeListResult {
 
 export function parseResumeInfoResult(data: unknown): ResumeInfoResult {
     return resumeInfoResultSchema.assert(data) as ResumeInfoResult;
+}
+
+export function parseResumeStatusResult(data: unknown): ResumeStatusResult {
+    return resumeStatusResultSchema.assert(data) as ResumeStatusResult;
 }
 
 export function parseJdAnalyzeResult(data: unknown): JdAnalyzeResult {

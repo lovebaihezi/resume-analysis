@@ -19,6 +19,7 @@
         "lib": ["es2024", "dom", "dom.iterable"],
         "types": [
             "./worker-configuration.d.ts",
+            "@cloudflare/vitest-pool-workers/types",
             "@types/node",
             "node",
             "vitest/globals"

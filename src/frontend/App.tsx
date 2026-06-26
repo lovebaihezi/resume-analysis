@@ -79,7 +79,7 @@ function AppRuntime({ apiClient }: { apiClient: ApiClient }) {
                             />
                             <Route
                                 element={<InfoPage apiClient={apiClient} />}
-                                path="/info/:name"
+                                path="/resumes/:resumeId"
                             />
                         </Routes>
                     </main>

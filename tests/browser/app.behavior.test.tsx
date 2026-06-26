@@ -8,55 +8,9 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { act } from "react";
+import { SWRConfig } from "swr";
 import { afterEach, describe, expect, it } from "vitest";
 import { App } from "../../src/frontend/App";
-import type { ApiClient, UploadSource } from "../../src/frontend/apiClient";
-import { sampleJobDescription, sampleResume } from "../fixtures/sampleData";
-
-function createBrowserApi(): ApiClient & {
-    sources: UploadSource[];
-} {
-    const sources: UploadSource[] = [];
-
-    return {
-        sources,
-        async uploadResume(file, source, onProgress) {
-            sources.push(source);
-            onProgress({ loaded: file.size, total: file.size, percent: 100 });
-
-            return {
-                resume: sampleResume,
-                upload: {
-                    bytes: file.size,
-                    percent: 100,
-                    source,
-                },
-            };
-        },
-        async listResumes() {
-            return {
-                count: 1,
-                resumes: [
-                    {
-                        name: "Ava Chen",
-                        workDuration: "2020-01-01 to 2024-03-01",
-                        highestEducation: "Master",
-                        skills: ["React", "Cloudflare Workers", "XState"],
-                    },
-                ],
-            };
-        },
-        async getResumeInfo() {
-            return { resume: sampleResume };
-        },
-        async analyzeJd() {
-            return { jd: sampleJobDescription };
-        },
-        async listJds() {
-            return { count: 1, jds: [sampleJobDescription] };
-        },
-    };
-}
 
 describe("resume analysis UI behavior", () => {
     afterEach(() => {
@@ -65,11 +19,13 @@ describe("resume analysis UI behavior", () => {
     });
 
     it("renders the responsive DaisyUI navbar and XState-owned links", async () => {
-        const api = createBrowserApi();
-        render(<App apiClient={api} initialEntries={["/"]} />);
+        await resetBackend({ seedResume: true });
+        renderApp("/");
 
         const nav = screen.getByRole("navigation", { name: /primary/i });
-        expect(within(nav).getByText("Resume")).toBeInTheDocument();
+        expect(
+            within(nav).getByRole("link", { name: /resume analysis/i }),
+        ).toBeInTheDocument();
         const resumeLinks =
             await within(nav).findAllByText(/uploaded resumes/i);
         const firstResumeLink = resumeLinks[0];
@@ -77,6 +33,9 @@ describe("resume analysis UI behavior", () => {
 
         expect(firstResumeLink).toBeDefined();
         expect(firstJdLink).toBeDefined();
+        await waitFor(() => {
+            expect(within(nav).getAllByText("1")[0]).toHaveClass("badge");
+        });
         expect(firstResumeLink?.closest("a")).toHaveAttribute(
             "href",
             "/resumes",
@@ -84,31 +43,64 @@ describe("resume analysis UI behavior", () => {
         expect(firstJdLink?.closest("a")).toHaveAttribute("href", "/jd");
     });
 
-    it("uploads a PDF from click selection, shows progress, and routes to the info page", async () => {
+    it("uploads a PDF from click selection, shows progress, and routes to the id-based detail page", async () => {
+        await resetBackend();
         const user = userEvent.setup();
-        const api = createBrowserApi();
-        render(<App apiClient={api} initialEntries={["/"]} />);
-        const file = new File(["%PDF-1.7\nAva"], "ava-chen.pdf", {
+        renderApp("/");
+        const file = new File([pdfWithPages(1, "Ava Chen")], "ava-chen.pdf", {
             type: "application/pdf",
         });
 
         await user.upload(screen.getByLabelText(/choose resume pdf/i), file);
 
-        expect(api.sources).toEqual(["click"]);
-        expect(await screen.findByText(/100%/)).toBeInTheDocument();
+        await waitFor(async () => {
+            expect((await readBackendState()).sources).toEqual(["click"]);
+        });
         await waitFor(() => {
-            expect(window.location.pathname).toBe("/info/Ava%20Chen");
+            expect(window.location.pathname).toMatch(/^\/resumes\/.+/);
         });
         expect(await screen.findByText(/raw resume/i)).toBeInTheDocument();
+        await waitFor(() => {
+            expect(document.body).toHaveTextContent(/100%/);
+        });
         expect(
             screen.getByText("Ava Chen", { selector: "p" }),
         ).toBeInTheDocument();
     });
 
+    it("shows a resume extraction skeleton while the queued analysis is pending", async () => {
+        await resetBackend({ mode: "pending" });
+        const user = userEvent.setup();
+        renderApp("/");
+        const file = new File([pdfWithPages(1, "Ava Chen")], "ava-chen.pdf", {
+            type: "application/pdf",
+        });
+
+        await user.upload(screen.getByLabelText(/choose resume pdf/i), file);
+
+        expect(
+            await screen.findByTestId("resume-extraction-skeleton"),
+        ).toBeInTheDocument();
+        expect(screen.getByText("ava-chen.pdf")).toBeInTheDocument();
+        expect(
+            screen.getByRole("heading", { name: /extracting resume/i }),
+        ).toBeInTheDocument();
+        expect(window.location.pathname).toBe("/");
+    });
+
+    it("links resume table rows by resumeId while displaying the extracted name", async () => {
+        const state = await resetBackend({ seedResume: true });
+        renderApp("/resumes");
+
+        const link = await screen.findByRole("link", { name: "Ava Chen" });
+
+        expect(link).toHaveAttribute("href", `/resumes/${state.seedResumeId}`);
+    });
+
     it("tracks drag and paste upload sources separately", async () => {
-        const api = createBrowserApi();
-        render(<App apiClient={api} initialEntries={["/"]} />);
-        const file = new File(["%PDF-1.7\nAva"], "ava-chen.pdf", {
+        await resetBackend();
+        renderApp("/");
+        const file = new File([pdfWithPages(1, "Ava Chen")], "ava-chen.pdf", {
             type: "application/pdf",
         });
         const zone = screen.getByTestId("resume-dropzone");
@@ -117,13 +109,13 @@ describe("resume analysis UI behavior", () => {
             fireEvent(zone, dropEvent(file));
         });
 
-        await waitFor(() => {
-            expect(api.sources).toContain("drag");
+        await waitFor(async () => {
+            expect((await readBackendState()).sources).toContain("drag");
         });
 
         cleanup();
         window.history.replaceState(null, "", "/");
-        render(<App apiClient={api} initialEntries={["/"]} />);
+        renderApp("/");
 
         const pasted = new ClipboardEvent("paste", { bubbles: true });
         Object.defineProperty(pasted, "clipboardData", {
@@ -135,15 +127,17 @@ describe("resume analysis UI behavior", () => {
             window.dispatchEvent(pasted);
         });
 
-        await waitFor(() => {
-            expect(api.sources).toContain("drag");
-            expect(api.sources).toContain("paste");
+        await waitFor(async () => {
+            expect((await readBackendState()).sources).toEqual([
+                "drag",
+                "paste",
+            ]);
         });
     });
 
     it("rejects non-PDF files in the upload surface before calling the API", async () => {
-        const api = createBrowserApi();
-        render(<App apiClient={api} initialEntries={["/"]} />);
+        await resetBackend();
+        renderApp("/");
         const file = new File(["hello"], "resume.txt", { type: "text/plain" });
         const zone = screen.getByTestId("resume-dropzone");
 
@@ -152,13 +146,13 @@ describe("resume analysis UI behavior", () => {
         });
 
         expect(await screen.findByText(/pdf files only/i)).toBeInTheDocument();
-        expect(api.sources).toEqual([]);
+        expect((await readBackendState()).sources).toEqual([]);
     });
 
     it("submits a raw JD and displays structured AI output", async () => {
+        await resetBackend();
         const user = userEvent.setup();
-        const api = createBrowserApi();
-        render(<App apiClient={api} initialEntries={["/jd"]} />);
+        renderApp("/jd");
 
         await user.type(
             screen.getByLabelText(/job description/i),
@@ -188,4 +182,74 @@ function dropEvent(file: File): Event {
     });
 
     return event;
+}
+
+function pdfWithPages(pageCount: number, label = "Resume"): string {
+    const kids = Array.from(
+        { length: pageCount },
+        (_, index) => `${index + 3} 0 R`,
+    ).join(" ");
+    const pageObjects = Array.from({ length: pageCount }, (_, index) => {
+        const objectId = index + 3;
+
+        return `${objectId} 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>
+endobj`;
+    }).join("\n");
+
+    return `%PDF-1.7
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Count ${pageCount} /Kids [${kids}] >>
+endobj
+${pageObjects}
+% ${label}
+trailer
+<< /Root 1 0 R >>
+%%EOF`;
+}
+
+function renderApp(initialEntry: string): void {
+    render(
+        <SWRConfig value={{ provider: () => new Map() }}>
+            <App initialEntries={[initialEntry]} />
+        </SWRConfig>,
+    );
+}
+
+type BackendState = {
+    mode: "auto" | "pending";
+    queuedJobs: Array<{ resumeId: string }>;
+    resumeCount: number;
+    seedResumeId?: string;
+    sources: string[];
+};
+
+async function resetBackend(
+    options: {
+        mode?: BackendState["mode"];
+        seedResume?: boolean;
+    } = {},
+): Promise<BackendState> {
+    const params = new URLSearchParams({
+        mode: options.mode ?? "auto",
+        seedResume: String(options.seedResume ?? false),
+    });
+    const response = await fetch(`/__test/reset?${params}`, {
+        method: "POST",
+    });
+
+    expect(response.ok).toBe(true);
+
+    return (await response.json()) as BackendState;
+}
+
+async function readBackendState(): Promise<BackendState> {
+    const response = await fetch("/__test/state");
+
+    expect(response.ok).toBe(true);
+
+    return (await response.json()) as BackendState;
 }
