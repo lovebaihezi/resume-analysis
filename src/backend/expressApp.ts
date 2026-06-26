@@ -1,6 +1,7 @@
 import express from "express";
 import type { ErrorRequestHandler, Request, RequestHandler } from "express";
 import type { AppServices } from "./ports";
+import { assertResumePdfPageLimit, PdfPageLimitError } from "./pdf";
 import type { UploadSource } from "../shared/types";
 import { summarizeResume } from "../shared/types";
 
@@ -34,6 +35,8 @@ export function createApiApp(services: AppServices): express.Express {
                     return;
                 }
 
+                assertResumePdfPageLimit(bytes);
+
                 const resume = await services.ai.extractResume({
                     bytes,
                     fileName,
@@ -51,6 +54,15 @@ export function createApiApp(services: AppServices): express.Express {
                     },
                 });
             } catch (error) {
+                if (error instanceof PdfPageLimitError) {
+                    res.status(
+                        error.code === "too_many_pages" ? 413 : 422,
+                    ).json({
+                        error: error.message,
+                    });
+                    return;
+                }
+
                 res.status(500).json({
                     error:
                         error instanceof Error
@@ -158,6 +170,14 @@ function readUploadSource(req: Request): UploadSource {
 function toBytes(body: unknown): Uint8Array {
     if (body instanceof Uint8Array) {
         return body;
+    }
+
+    if (body instanceof ArrayBuffer) {
+        return new Uint8Array(body);
+    }
+
+    if (ArrayBuffer.isView(body)) {
+        return new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
     }
 
     if (typeof body === "string") {
