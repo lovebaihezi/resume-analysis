@@ -1,6 +1,5 @@
 import { assign, setup } from "xstate";
 import type { UploadProgress, UploadSource } from "./apiClient";
-import { resumeWriterSlug } from "../shared/types";
 
 type AppContext = {
     error?: string;
@@ -10,7 +9,13 @@ type AppContext = {
         fileName?: string;
         percent: number;
         source?: UploadSource;
-        status: "idle" | "checking" | "uploading" | "done" | "error";
+        status:
+            | "idle"
+            | "checking"
+            | "uploading"
+            | "analyzing"
+            | "done"
+            | "error";
     };
 };
 
@@ -19,7 +24,13 @@ type AppEvent =
     | { type: "UPLOAD_REJECTED"; message: string }
     | { type: "UPLOAD_STARTED"; fileName: string; source: UploadSource }
     | { type: "UPLOAD_PROGRESS"; progress: UploadProgress }
-    | { type: "UPLOAD_DONE"; bytes: number; name: string; source: UploadSource }
+    | { type: "UPLOAD_ACCEPTED"; bytes: number; source: UploadSource }
+    | {
+          type: "UPLOAD_DONE";
+          bytes: number;
+          resumeId: string;
+          source: UploadSource;
+      }
     | { type: "UPLOAD_FAILED"; message: string };
 
 export const appMachine = setup({
@@ -38,7 +49,7 @@ export const appMachine = setup({
         },
         pushInfoRoute: ({ context, event }) => {
             if (event.type === "UPLOAD_DONE") {
-                context.navigate(`/info/${resumeWriterSlug(event.name)}`);
+                context.navigate(`/resumes/${event.resumeId}`);
             }
         },
     },
@@ -56,12 +67,25 @@ export const appMachine = setup({
         NAVIGATE: {
             actions: "pushRoute",
         },
+        UPLOAD_ACCEPTED: {
+            actions: assign(({ context, event }) => ({
+                error: undefined,
+                upload: {
+                    bytes: event.bytes,
+                    fileName: context.upload.fileName,
+                    percent: 100,
+                    source: event.source,
+                    status: "analyzing" as const,
+                },
+            })),
+        },
         UPLOAD_DONE: {
             actions: [
-                assign(({ event }) => ({
+                assign(({ context, event }) => ({
                     error: undefined,
                     upload: {
                         bytes: event.bytes,
+                        fileName: context.upload.fileName,
                         percent: 100,
                         source: event.source,
                         status: "done" as const,

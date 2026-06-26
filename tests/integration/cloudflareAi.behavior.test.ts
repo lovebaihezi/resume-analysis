@@ -90,8 +90,9 @@ describe("Cloudflare Workers AI resume extraction", () => {
             GEMINI_MODEL: "gemini-3.5-flash",
             JD_INDEX: {} as DurableObjectNamespace,
             JD_OBJECT: {} as DurableObjectNamespace,
-            RESUME_INDEX: {} as DurableObjectNamespace,
-            RESUME_OBJECT: {} as DurableObjectNamespace,
+            RESUME_ANALYSIS_QUEUE: {} as Queue,
+            RESUME_DOCUMENT: {} as DurableObjectNamespace,
+            RESUME_REGISTRY: {} as DurableObjectNamespace,
         } as CloudflareEnv);
         const bytes = new TextEncoder().encode("%PDF-1.7\nKai Tan resume");
 

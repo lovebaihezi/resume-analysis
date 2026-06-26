@@ -29,12 +29,12 @@
     "durable_objects": {
         "bindings": [
             {
-                "name": "RESUME_OBJECT",
-                "class_name": "ResumeObject",
+                "name": "RESUME_REGISTRY",
+                "class_name": "ResumeRegistryObject",
             },
             {
-                "name": "RESUME_INDEX",
-                "class_name": "ResumeIndexObject",
+                "name": "RESUME_DOCUMENT",
+                "class_name": "ResumeDocumentObject",
             },
             {
                 "name": "JD_OBJECT",
@@ -46,6 +46,23 @@
             },
         ],
     },
+    "queues": {
+        "producers": [
+            {
+                "binding": "RESUME_ANALYSIS_QUEUE",
+                "queue": "resume-analysis-jobs",
+            },
+        ],
+        "consumers": [
+            {
+                "queue": "resume-analysis-jobs",
+                "max_batch_size": 1,
+                "max_batch_timeout": 5,
+                "max_retries": 3,
+                "dead_letter_queue": "resume-analysis-jobs-dlq",
+            },
+        ],
+    },
     "migrations": [
         {
             "tag": "v1",
@@ -54,6 +71,13 @@
                 "ResumeIndexObject",
                 "JobDescriptionObject",
                 "JobDescriptionIndexObject",
+            ],
+        },
+        {
+            "tag": "v2",
+            "new_sqlite_classes": [
+                "ResumeRegistryObject",
+                "ResumeDocumentObject",
             ],
         },
     ],

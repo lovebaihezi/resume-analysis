@@ -3,7 +3,6 @@ import type { ErrorRequestHandler, Request, RequestHandler } from "express";
 import { DuplicateJobDescriptionError, type AppServices } from "./ports";
 import { assertResumePdfPageLimit, PdfPageLimitError } from "./pdf";
 import type { UploadSource } from "../shared/types";
-import { summarizeResume } from "../shared/types";
 
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 const uploadSources = new Set(["click", "drag", "paste"]);
@@ -37,16 +36,29 @@ export function createApiApp(services: AppServices): express.Express {
 
                 assertResumePdfPageLimit(bytes);
 
-                const resume = await services.ai.extractResume({
+                const upload = await services.resumeStore.createPendingUpload({
                     bytes,
                     fileName,
                     source,
                 });
 
-                await services.resumeStore.save(resume);
+                try {
+                    await services.resumeAnalysisQueue.enqueue({
+                        resumeId: upload.resumeId,
+                    });
+                } catch (error) {
+                    await services.resumeStore.failPendingAnalysis(
+                        upload.resumeId,
+                    );
+                    throw error;
+                }
 
-                res.status(201).json({
-                    resume,
+                res.status(202).json({
+                    archivedAt: upload.archivedAt,
+                    createdAt: upload.createdAt,
+                    resumeId: upload.resumeId,
+                    status: upload.status,
+                    updatedAt: upload.updatedAt,
                     upload: {
                         bytes: bytes.byteLength,
                         percent: 100,
@@ -76,27 +88,42 @@ export function createApiApp(services: AppServices): express.Express {
     app.get(
         "/api/resumes",
         asyncHandler(async (_req, res) => {
-            const resumes = await services.resumeStore.list();
+            const resumes = await services.resumeStore.listSummaries();
 
             res.json({
                 count: resumes.length,
-                resumes: resumes.map(summarizeResume),
+                resumes,
             });
         }),
     );
 
     app.get(
-        "/api/resumes/info/:name",
+        "/api/resumes/:resumeId/status",
         asyncHandler(async (req, res) => {
-            const name = String(req.params.name ?? "");
-            const resume = await services.resumeStore.getByName(name);
+            const resumeId = String(req.params.resumeId ?? "");
+            const summary = await services.resumeStore.getSummary(resumeId);
 
-            if (!resume) {
+            if (!summary) {
                 res.status(404).json({ error: "Resume not found" });
                 return;
             }
 
-            res.json({ resume });
+            res.json(summary);
+        }),
+    );
+
+    app.get(
+        "/api/resumes/:resumeId",
+        asyncHandler(async (req, res) => {
+            const resumeId = String(req.params.resumeId ?? "");
+            const document = await services.resumeStore.getById(resumeId);
+
+            if (!document) {
+                res.status(404).json({ error: "Resume not found" });
+                return;
+            }
+
+            res.json(document);
         }),
     );
 
