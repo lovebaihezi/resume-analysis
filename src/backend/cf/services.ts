@@ -5,9 +5,14 @@ import type {
     ResumeExtractionInput,
     ResumeStore,
 } from "../ports";
+import { DuplicateJobDescriptionError } from "../ports";
 import { normalizeResumeAnalysis } from "../normalization";
 import { parseResumeAnalysis } from "../../shared/schemas";
-import type { JobDescription, ResumeAnalysis } from "../../shared/types";
+import type {
+    JobDescription,
+    JobDescriptionSummary,
+    ResumeAnalysis,
+} from "../../shared/types";
 import { resumeWriterKey } from "../../shared/types";
 
 const JD_EXTRACTION_MODEL = "@cf/moonshotai/kimi-k2.6";
@@ -218,7 +223,11 @@ class DurableObjectJdStore implements JobDescriptionStore {
         private readonly index: DurableObjectNamespace,
     ) {}
 
-    async save(jd: JobDescription): Promise<void> {
+    async save(jd: JobDescription): Promise<JobDescription> {
+        if (await this.getById(jd.id)) {
+            throw new DuplicateJobDescriptionError(jd.id);
+        }
+
         await fetchDurable(this.objects, jd.id, {
             body: JSON.stringify(jd),
             method: "PUT",
@@ -227,24 +236,36 @@ class DurableObjectJdStore implements JobDescriptionStore {
             body: JSON.stringify({ id: jd.id }),
             method: "PUT",
         });
+
+        return jd;
     }
 
-    async list(): Promise<JobDescription[]> {
+    async getById(id: string): Promise<JobDescription | undefined> {
+        const response = await fetchDurable(this.objects, id);
+
+        if (response.status === 404) {
+            return undefined;
+        }
+
+        const payload = (await response.json()) as {
+            jd: JobDescription;
+        };
+
+        return payload.jd;
+    }
+
+    async listSummaries(): Promise<JobDescriptionSummary[]> {
+        return (await this.list()).map((jd) => ({
+            id: jd.id,
+            tags: jd.tags,
+            title: jd.title,
+        }));
+    }
+
+    private async list(): Promise<JobDescription[]> {
         const index = await readIndex(this.index, "__jd_index__");
         const jds = await Promise.all(
-            index.map(async (id) => {
-                const response = await fetchDurable(this.objects, id);
-
-                if (response.status === 404) {
-                    return undefined;
-                }
-
-                const payload = (await response.json()) as {
-                    jd: JobDescription;
-                };
-
-                return payload.jd;
-            }),
+            index.map(async (id) => this.getById(id)),
         );
 
         return jds.filter((jd): jd is JobDescription => Boolean(jd));

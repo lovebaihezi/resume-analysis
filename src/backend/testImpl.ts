@@ -4,7 +4,12 @@ import type {
     JobDescriptionStore,
     ResumeStore,
 } from "./ports";
-import type { JobDescription, ResumeAnalysis } from "../shared/types";
+import { DuplicateJobDescriptionError } from "./ports";
+import type {
+    JobDescription,
+    JobDescriptionSummary,
+    ResumeAnalysis,
+} from "../shared/types";
 import { resumeWriterKey } from "../shared/types";
 
 const fixtureResume: ResumeAnalysis = {
@@ -85,12 +90,26 @@ class MemoryResumeStore implements ResumeStore {
 class MemoryJdStore implements JobDescriptionStore {
     readonly records = new Map<string, JobDescription>();
 
-    async save(jd: JobDescription): Promise<void> {
+    async save(jd: JobDescription): Promise<JobDescription> {
+        if (this.records.has(jd.id)) {
+            throw new DuplicateJobDescriptionError(jd.id);
+        }
+
         this.records.set(jd.id, jd);
+
+        return jd;
     }
 
-    async list(): Promise<JobDescription[]> {
-        return [...this.records.values()];
+    async getById(id: string): Promise<JobDescription | undefined> {
+        return this.records.get(id);
+    }
+
+    async listSummaries(): Promise<JobDescriptionSummary[]> {
+        return [...this.records.values()].map((jd) => ({
+            id: jd.id,
+            tags: jd.tags,
+            title: jd.title,
+        }));
     }
 
     async count(): Promise<number> {

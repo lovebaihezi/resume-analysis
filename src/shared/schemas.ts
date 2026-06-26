@@ -1,6 +1,7 @@
 import { type as arkType } from "arktype";
 import type {
     JdAnalyzeResult,
+    JdInfoResult,
     JdListResult,
     ResumeAnalysis,
     ResumeInfoResult,
@@ -77,6 +78,12 @@ const jobDescription = arkType({
     requiredExperiences: "string[]",
 });
 
+const jobDescriptionSummary = arkType({
+    id: "string",
+    tags: "string[]",
+    title: "string",
+});
+
 export const resumeUploadResultSchema = arkType({
     resume: resumeAnalysisSchema,
     upload: {
@@ -101,7 +108,11 @@ export const jdAnalyzeResultSchema = arkType({
 
 export const jdListResultSchema = arkType({
     count: "number",
-    jds: jobDescription.array(),
+    jds: jobDescriptionSummary.array(),
+});
+
+export const jdInfoResultSchema = arkType({
+    jd: jobDescription,
 });
 
 export function parseResumeUploadResult(data: unknown): ResumeUploadResult {
@@ -126,4 +137,8 @@ export function parseJdAnalyzeResult(data: unknown): JdAnalyzeResult {
 
 export function parseJdListResult(data: unknown): JdListResult {
     return jdListResultSchema.assert(data) as JdListResult;
+}
+
+export function parseJdInfoResult(data: unknown): JdInfoResult {
+    return jdInfoResultSchema.assert(data) as JdInfoResult;
 }

@@ -1,5 +1,6 @@
 import type {
     JobDescription,
+    JobDescriptionSummary,
     ResumeAnalysis,
     UploadSource,
 } from "../shared/types";
@@ -18,8 +19,9 @@ export interface ResumeStore {
 }
 
 export interface JobDescriptionStore {
-    save(jd: JobDescription): Promise<void>;
-    list(): Promise<JobDescription[]>;
+    save(jd: JobDescription): Promise<JobDescription>;
+    getById(id: string): Promise<JobDescription | undefined>;
+    listSummaries(): Promise<JobDescriptionSummary[]>;
     count(): Promise<number>;
 }
 
@@ -33,3 +35,10 @@ export type AppServices = {
     jdStore: JobDescriptionStore;
     ai: AiExtractor;
 };
+
+export class DuplicateJobDescriptionError extends Error {
+    constructor(id: string) {
+        super(`Job description already exists: ${id}`);
+        this.name = "DuplicateJobDescriptionError";
+    }
+}

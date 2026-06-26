@@ -18,7 +18,12 @@ export function JdPage({ apiClient }: JdPageProps) {
             jds: [],
         },
     });
-    const active = data?.jds.find((jd) => jd.id === activeId) ?? data?.jds[0];
+    const selectedId = activeId ?? data?.jds[0]?.id;
+    const { data: activeData } = useSWR(
+        selectedId ? ["jds.detail", selectedId] : null,
+        ([, id]) => apiClient.getJdInfo(id),
+    );
+    const active = activeData?.jd;
 
     async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
         event.preventDefault();
@@ -28,6 +33,11 @@ export function JdPage({ apiClient }: JdPageProps) {
         try {
             const result = await apiClient.analyzeJd(rawText);
             setActiveId(result.jd.id);
+            await mutate(
+                ["jds.detail", result.jd.id],
+                { jd: result.jd },
+                { revalidate: false },
+            );
             await mutate("jds.list");
         } catch (submitError) {
             setError(

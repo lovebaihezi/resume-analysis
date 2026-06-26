@@ -53,7 +53,19 @@ function createBrowserApi(): ApiClient & {
             return { jd: sampleJobDescription };
         },
         async listJds() {
-            return { count: 1, jds: [sampleJobDescription] };
+            return {
+                count: 1,
+                jds: [
+                    {
+                        id: sampleJobDescription.id,
+                        tags: sampleJobDescription.tags,
+                        title: sampleJobDescription.title,
+                    },
+                ],
+            };
+        },
+        async getJdInfo() {
+            return { jd: sampleJobDescription };
         },
     };
 }
