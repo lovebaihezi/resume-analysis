@@ -54,6 +54,8 @@ function readyDocument(resumeId: string): ResumeDocument {
 }
 
 class FixtureAi {
+    readonly gatewayCalls: unknown[] = [];
+    readonly markdownCalls: Array<{ blob: Blob; name: string }> = [];
     readonly runCalls: unknown[] = [];
 
     async run(
@@ -65,6 +67,55 @@ class FixtureAi {
 
         return {
             response: JSON.stringify(sampleResume),
+        };
+    }
+
+    gateway(gatewayId: string): {
+        run: (request: unknown, options?: unknown) => Promise<Response>;
+    } {
+        void gatewayId;
+
+        return {
+            run: async (request: unknown, options?: unknown) => {
+                this.gatewayCalls.push({ options, request });
+
+                return new Response(
+                    JSON.stringify({
+                        candidates: [
+                            {
+                                content: {
+                                    parts: [
+                                        {
+                                            text: JSON.stringify(sampleResume),
+                                        },
+                                    ],
+                                    role: "model",
+                                },
+                                finishReason: "STOP",
+                            },
+                        ],
+                    }),
+                    {
+                        headers: {
+                            "content-type": "application/json",
+                        },
+                        status: 200,
+                    },
+                );
+            },
+        };
+    }
+
+    async toMarkdown(file: { blob: Blob; name: string }): Promise<unknown> {
+        this.markdownCalls.push(file);
+
+        return {
+            data: "Ava Chen resume converted to markdown",
+            format: "markdown",
+            id: "converted-ava-chen",
+            mimeType: "application/pdf",
+            name: file.name,
+            tokens: 8,
         };
     }
 }
@@ -139,7 +190,9 @@ describe("Cloudflare Durable Object storage behavior", () => {
         const queueResult = await getQueueResult(batch, ctx);
         expect(queueResult.explicitAcks).toEqual(["message-1"]);
         expect(queueResult.retryMessages).toEqual([]);
-        expect(ai.runCalls).toHaveLength(1);
+        expect(ai.markdownCalls).toHaveLength(1);
+        expect(ai.gatewayCalls).toHaveLength(1);
+        expect(ai.runCalls).toHaveLength(0);
 
         const readyStatus = await workerExports.default.fetch(
             `${apiOrigin}/api/resumes/${upload.resumeId}/status`,
@@ -279,6 +332,8 @@ describe("Cloudflare Durable Object storage behavior", () => {
 function workerEnvWithAi(ai: FixtureAi): CloudflareEnv {
     return {
         AI: ai as unknown as Ai,
+        AI_GATEWAY_NAME: "collects-auto-ai",
+        GEMINI_MODEL: "gemini-3.5-flash",
         JD_INDEX: env.JD_INDEX,
         JD_OBJECT: env.JD_OBJECT,
         RESUME_ANALYSIS_QUEUE: env.RESUME_ANALYSIS_QUEUE,

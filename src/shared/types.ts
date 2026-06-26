@@ -82,6 +82,12 @@ export type JobDescription = {
     requiredExperiences: string[];
 };
 
+export type JobDescriptionSummary = {
+    id: string;
+    tags: string[];
+    title: string;
+};
+
 export type ResumeUploadResult = ResumeMetadata & {
     upload: {
         bytes: number;
@@ -105,7 +111,11 @@ export type JdAnalyzeResult = {
 
 export type JdListResult = {
     count: number;
-    jds: JobDescription[];
+    jds: JobDescriptionSummary[];
+};
+
+export type JdInfoResult = {
+    jd: JobDescription;
 };
 
 const degreeRank = new Map([

@@ -1,5 +1,6 @@
 import type {
     JdAnalyzeResult,
+    JdInfoResult,
     JdListResult,
     ResumeInfoResult,
     ResumeListResult,
@@ -9,6 +10,7 @@ import type {
 } from "../shared/types";
 import {
     parseJdAnalyzeResult,
+    parseJdInfoResult,
     parseJdListResult,
     parseResumeInfoResult,
     parseResumeListResult,
@@ -35,6 +37,7 @@ export interface ApiClient {
     getResumeStatus(resumeId: string): Promise<ResumeStatusResult>;
     analyzeJd(rawText: string): Promise<JdAnalyzeResult>;
     listJds(): Promise<JdListResult>;
+    getJdInfo(id: string): Promise<JdInfoResult>;
 }
 
 export const browserApiClient: ApiClient = {
@@ -97,6 +100,11 @@ export const browserApiClient: ApiClient = {
     },
     async listJds() {
         return parseJdListResult(await getJson("/api/jds"));
+    },
+    async getJdInfo(id) {
+        return parseJdInfoResult(
+            await getJson(`/api/jds/${encodeURIComponent(id)}`),
+        );
     },
 };
 

@@ -10,8 +10,12 @@ import type {
     ResumeUploadRecord,
 } from "../ports";
 import { createResumeId } from "../ids";
+import { DuplicateJobDescriptionError } from "../ports";
+import { normalizeResumeAnalysis } from "../normalization";
+import { parseResumeAnalysis } from "../../shared/schemas";
 import type {
     JobDescription,
+    JobDescriptionSummary,
     ResumeAnalysis,
     ResumeDocument,
     ResumeMetadata,
@@ -23,12 +27,138 @@ import type {
     ResumeRegistryObject,
 } from "./durableObjects";
 
-const KIMI_MODEL = "@cf/moonshotai/kimi-k2.6";
+const JD_EXTRACTION_MODEL = "@cf/moonshotai/kimi-k2.6";
+const DEFAULT_AI_GATEWAY_NAME = "collects-auto-ai";
+const DEFAULT_GEMINI_RESUME_MODEL = "gemini-3.5-flash";
+const GOOGLE_AI_STUDIO_PROVIDER = "google-ai-studio";
+const MAX_RESUME_MARKDOWN_CHARS = 3_500;
+const GEMINI_RESUME_MAX_OUTPUT_TOKENS = 4096;
+const RESUME_SECTION_PATTERN =
+    /(?:^|\n)(?:#{1,6}\s*)?(Education|Work Experience|Open-Source Contributions|Research Experience|Projects?|Skills)\b[^\n]*(?:\n[\s\S]*?)(?=\n(?:#{1,6}\s*)?(?:Education|Work Experience|Open-Source Contributions|Research Experience|Projects?|Skills)\b|$)/gi;
+const RESUME_ANALYSIS_RESPONSE_SCHEMA = {
+    properties: {
+        basic: {
+            properties: {
+                email: { type: "STRING" },
+                name: { type: "STRING" },
+                phone: { type: "STRING" },
+                socialMedia: {
+                    items: {
+                        properties: {
+                            link: { type: "STRING" },
+                            name: { type: "STRING" },
+                        },
+                        required: ["name", "link"],
+                        type: "OBJECT",
+                    },
+                    type: "ARRAY",
+                },
+            },
+            required: ["name", "socialMedia"],
+            type: "OBJECT",
+        },
+        edu: {
+            items: {
+                properties: {
+                    awards: {
+                        items: {
+                            properties: {
+                                name: { type: "STRING" },
+                                value: { type: "STRING" },
+                            },
+                            required: ["name", "value"],
+                            type: "OBJECT",
+                        },
+                        type: "ARRAY",
+                    },
+                    degree: { type: "STRING" },
+                    experiences: {
+                        items: {
+                            properties: {
+                                des: { type: "STRING" },
+                            },
+                            required: ["des"],
+                            type: "OBJECT",
+                        },
+                        type: "ARRAY",
+                    },
+                    school: { type: "STRING" },
+                },
+                required: ["awards", "experiences"],
+                type: "OBJECT",
+            },
+            type: "ARRAY",
+        },
+        project: {
+            items: {
+                properties: {
+                    des: { type: "STRING" },
+                    duration: {
+                        items: { type: "STRING" },
+                        type: "ARRAY",
+                    },
+                    name: { type: "STRING" },
+                    role: {
+                        enum: ["maintainer", "contributor", "owner"],
+                        type: "STRING",
+                    },
+                    type: {
+                        enum: ["open-source", "hobby"],
+                        type: "STRING",
+                    },
+                },
+                required: ["duration"],
+                type: "OBJECT",
+            },
+            type: "ARRAY",
+        },
+        rawText: { type: "STRING" },
+        skills: {
+            items: {
+                properties: {
+                    des: { type: "STRING" },
+                    name: { type: "STRING" },
+                },
+                required: ["name"],
+                type: "OBJECT",
+            },
+            type: "ARRAY",
+        },
+        work: {
+            items: {
+                properties: {
+                    company: { type: "STRING" },
+                    des: { type: "STRING" },
+                    duration: {
+                        items: { type: "STRING" },
+                        type: "ARRAY",
+                    },
+                    level: { type: "STRING" },
+                    location: {
+                        enum: ["hybrid", "remote", "on-site"],
+                        type: "STRING",
+                    },
+                    role: { type: "STRING" },
+                    type: {
+                        enum: ["intern", "full-time"],
+                        type: "STRING",
+                    },
+                },
+                required: ["duration"],
+                type: "OBJECT",
+            },
+            type: "ARRAY",
+        },
+    },
+    required: ["rawText", "basic", "edu", "work", "project", "skills"],
+    type: "OBJECT",
+} as const;
 const RESUME_REGISTRY_NAME = "__resume_registry__";
 
 export type CloudflareEnv = Env & {
     AI: Ai;
     AI_GATEWAY_NAME?: string;
+    GEMINI_MODEL?: string;
     JD_INDEX: DurableObjectNamespace;
     JD_OBJECT: DurableObjectNamespace;
     RESUME_ANALYSIS_QUEUE: Queue<ResumeAnalysisJob>;
@@ -38,7 +168,11 @@ export type CloudflareEnv = Env & {
 
 export function createCloudflareServices(env: CloudflareEnv): AppServices {
     return {
-        ai: new WorkersAiExtractor(env.AI, env.AI_GATEWAY_NAME),
+        ai: new WorkersAiExtractor(
+            env.AI,
+            env.AI_GATEWAY_NAME ?? DEFAULT_AI_GATEWAY_NAME,
+            env.GEMINI_MODEL ?? DEFAULT_GEMINI_RESUME_MODEL,
+        ),
         jdStore: new DurableObjectJdStore(env.JD_OBJECT, env.JD_INDEX),
         resumeAnalysisQueue: new CloudflareResumeAnalysisQueue(
             env.RESUME_ANALYSIS_QUEUE,
@@ -168,7 +302,11 @@ class DurableObjectJdStore implements JobDescriptionStore {
         private readonly index: DurableObjectNamespace,
     ) {}
 
-    async save(jd: JobDescription): Promise<void> {
+    async save(jd: JobDescription): Promise<JobDescription> {
+        if (await this.getById(jd.id)) {
+            throw new DuplicateJobDescriptionError(jd.id);
+        }
+
         await fetchDurable(this.objects, jd.id, {
             body: JSON.stringify(jd),
             method: "PUT",
@@ -177,24 +315,36 @@ class DurableObjectJdStore implements JobDescriptionStore {
             body: JSON.stringify({ id: jd.id }),
             method: "PUT",
         });
+
+        return jd;
     }
 
-    async list(): Promise<JobDescription[]> {
+    async getById(id: string): Promise<JobDescription | undefined> {
+        const response = await fetchDurable(this.objects, id);
+
+        if (response.status === 404) {
+            return undefined;
+        }
+
+        const payload = (await response.json()) as {
+            jd: JobDescription;
+        };
+
+        return payload.jd;
+    }
+
+    async listSummaries(): Promise<JobDescriptionSummary[]> {
+        return (await this.list()).map((jd) => ({
+            id: jd.id,
+            tags: jd.tags,
+            title: jd.title,
+        }));
+    }
+
+    private async list(): Promise<JobDescription[]> {
         const index = await readIndex(this.index, "__jd_index__");
         const jds = await Promise.all(
-            index.map(async (id) => {
-                const response = await fetchDurable(this.objects, id);
-
-                if (response.status === 404) {
-                    return undefined;
-                }
-
-                const payload = (await response.json()) as {
-                    jd: JobDescription;
-                };
-
-                return payload.jd;
-            }),
+            index.map(async (id) => this.getById(id)),
         );
 
         return jds.filter((jd): jd is JobDescription => Boolean(jd));
@@ -209,23 +359,33 @@ class WorkersAiExtractor implements AiExtractor {
     constructor(
         private readonly ai: Ai,
         private readonly gatewayId?: string,
+        private readonly geminiResumeModel = DEFAULT_GEMINI_RESUME_MODEL,
     ) {}
 
     async extractResume(input: ResumeExtractionInput): Promise<ResumeAnalysis> {
-        const response = await this.runJsonPrompt(resumePrompt(input));
+        const markdown = await this.pdfToMarkdown(input);
+        const response = await this.runGeminiResumePrompt(
+            resumePrompt(input, markdown),
+        );
 
-        return normalizeResume(response);
+        return parseResumeAnalysis(normalizeResumeAnalysis(response));
     }
 
     async analyzeJobDescription(rawText: string): Promise<JobDescription> {
-        const response = await this.runJsonPrompt(jdPrompt(rawText));
+        const response = await this.runJsonPrompt(
+            JD_EXTRACTION_MODEL,
+            jdPrompt(rawText),
+        );
 
         return normalizeJd(response, rawText);
     }
 
-    private async runJsonPrompt(prompt: string): Promise<unknown> {
+    private async runJsonPrompt(
+        model: string,
+        prompt: string,
+    ): Promise<unknown> {
         const response = await this.ai.run(
-            KIMI_MODEL,
+            model,
             {
                 messages: [
                     {
@@ -254,6 +414,89 @@ class WorkersAiExtractor implements AiExtractor {
         );
 
         return parseAiJson(response);
+    }
+
+    private async runGeminiResumePrompt(content: string): Promise<unknown> {
+        if (!this.gatewayId) {
+            throw new Error(
+                "AI Gateway name is required for resume extraction",
+            );
+        }
+
+        const response = await this.ai.gateway(this.gatewayId).run(
+            {
+                endpoint: `v1beta/models/${this.geminiResumeModel}:generateContent`,
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                provider: GOOGLE_AI_STUDIO_PROVIDER,
+                query: {
+                    contents: [
+                        {
+                            parts: [{ text: content }],
+                            role: "user",
+                        },
+                    ],
+                    generationConfig: {
+                        maxOutputTokens: GEMINI_RESUME_MAX_OUTPUT_TOKENS,
+                        responseMimeType: "application/json",
+                        responseSchema: RESUME_ANALYSIS_RESPONSE_SCHEMA,
+                        temperature: 0,
+                    },
+                },
+            },
+            {
+                gateway: {
+                    cacheTtl: 3600,
+                    collectLog: true,
+                    id: this.gatewayId,
+                    skipCache: false,
+                },
+            },
+        );
+        const responseText = await response.text();
+
+        if (!response.ok) {
+            throw new Error(
+                `${this.geminiResumeModel} extraction failed with HTTP ${response.status}: ${previewText(responseText)}`,
+            );
+        }
+
+        const payload = JSON.parse(responseText) as unknown;
+        const text = readGeminiText(payload);
+
+        if (!text) {
+            throw new Error("Gemini response did not include text content");
+        }
+
+        return parseAiJson(text);
+    }
+
+    private async pdfToMarkdown(input: ResumeExtractionInput): Promise<string> {
+        const result = (await this.ai.toMarkdown(
+            {
+                blob: new Blob([bytesToArrayBuffer(input.bytes)], {
+                    type: "application/pdf",
+                }),
+                name: input.fileName,
+            },
+            {
+                conversionOptions: {
+                    pdf: {
+                        images: {
+                            convert: false,
+                        },
+                        metadata: false,
+                    },
+                },
+            },
+        )) as ConversionResponse;
+
+        if (result.format === "error") {
+            throw new Error(`PDF markdown conversion failed: ${result.error}`);
+        }
+
+        return compactResumeMarkdown(result.data);
     }
 }
 
@@ -284,22 +527,35 @@ async function readIndex(
     return payload.ids ?? [];
 }
 
-function resumePrompt(input: ResumeExtractionInput): string {
-    return `Extract this PDF resume into JSON with keys rawText, basic, edu, work, project, skills.
+type ConversionResponse =
+    | {
+          data: string;
+          format: "markdown";
+          tokens?: number;
+      }
+    | {
+          error: string;
+          format: "error";
+      };
+
+function resumePrompt(input: ResumeExtractionInput, markdown: string): string {
+    return `Extract this PDF resume text into concise JSON with keys rawText, basic, edu, work, project, skills.
 Schema:
 {
-  "rawText": "string",
+  "rawText": "string, <=600 chars summary/source excerpt, not the full resume",
   "basic": {"name": "string", "email": "string", "phone": "string", "socialMedia": [{"name": "string", "link": "string"}]},
   "edu": [{"school": "string", "degree": "string", "awards": [{"name": "string", "value": "string"}], "experiences": [{"des": "string"}]}],
   "work": [{"company": "string", "duration": ["ISO date"], "type": "intern|full-time", "location": "hybrid|remote|on-site", "level": "string", "role": "string", "des": "string"}],
   "project": [{"name": "string", "duration": ["ISO date"], "type": "open-source|hobby", "role": "maintainer|contributor|owner", "des": "string"}],
   "skills": [{"name": "string", "des": "string"}]
 }
-Missing fields must become empty strings or empty arrays.
+Missing non-enum string fields must become empty strings. Missing arrays must become empty arrays.
+When work.type, work.location, project.type, or project.role is unknown, omit that field instead of returning an empty string.
+Keep descriptions under 180 chars and skills under 80 chars. Return only valid minified JSON.
 File name: ${input.fileName}
 Upload source: ${input.source}
-PDF bytes as base64:
-${bytesToBase64(input.bytes)}`;
+Markdown resume excerpt:
+${markdown}`;
 }
 
 function jdPrompt(rawText: string): string {
@@ -335,22 +591,23 @@ function readAiText(response: unknown): string {
     return maybe.response ?? maybe.choices?.[0]?.message?.content ?? "{}";
 }
 
-function normalizeResume(data: unknown): ResumeAnalysis {
-    const value = data as Partial<ResumeAnalysis>;
+function readGeminiText(response: unknown): string {
+    const record = asRecord(response);
+    const candidates = Array.isArray(record?.candidates)
+        ? record.candidates
+        : [];
 
-    return {
-        basic: {
-            email: value.basic?.email ?? "",
-            name: value.basic?.name?.trim() || "Unknown",
-            phone: value.basic?.phone ?? "",
-            socialMedia: value.basic?.socialMedia ?? [],
-        },
-        edu: value.edu ?? [],
-        project: value.project ?? [],
-        rawText: value.rawText ?? "",
-        skills: value.skills ?? [],
-        work: value.work ?? [],
-    };
+    for (const candidate of candidates) {
+        const candidateRecord = asRecord(candidate);
+        const content = asRecord(candidateRecord?.content);
+        const text = readTextContent(content?.parts);
+
+        if (text) {
+            return text;
+        }
+    }
+
+    return "";
 }
 
 function normalizeJd(data: unknown, rawText: string): JobDescription {
@@ -368,14 +625,58 @@ function normalizeJd(data: unknown, rawText: string): JobDescription {
     };
 }
 
-function bytesToBase64(bytes: Uint8Array): string {
-    let binary = "";
-    const chunkSize = 0x8000;
+function compactResumeMarkdown(markdown: string): string {
+    const normalized = markdown.replace(/\r\n/g, "\n").trim();
 
-    for (let index = 0; index < bytes.length; index += chunkSize) {
-        const chunk = bytes.slice(index, index + chunkSize);
-        binary += String.fromCharCode(...chunk);
+    if (normalized.length <= MAX_RESUME_MARKDOWN_CHARS) {
+        return normalized;
     }
 
-    return btoa(binary);
+    const sections = [...normalized.matchAll(RESUME_SECTION_PATTERN)]
+        .map((match) => match[0]?.trim() ?? "")
+        .filter(Boolean);
+    const compacted = sections.join("\n\n");
+
+    return (compacted || normalized).slice(0, MAX_RESUME_MARKDOWN_CHARS);
+}
+
+function bytesToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+    const buffer = new ArrayBuffer(bytes.byteLength);
+    new Uint8Array(buffer).set(bytes);
+
+    return buffer;
+}
+
+function previewText(text: string): string {
+    return text.replace(/\s+/g, " ").slice(0, 320);
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+    return value && typeof value === "object"
+        ? (value as Record<string, unknown>)
+        : undefined;
+}
+
+function readTextContent(value: unknown): string | undefined {
+    if (typeof value === "string") {
+        return value.length > 0 ? value : undefined;
+    }
+
+    if (!Array.isArray(value)) {
+        return undefined;
+    }
+
+    const parts = value
+        .map((part) => {
+            if (typeof part === "string") {
+                return part;
+            }
+
+            const record = asRecord(part);
+
+            return typeof record?.text === "string" ? record.text : "";
+        })
+        .filter(Boolean);
+
+    return parts.length > 0 ? parts.join("") : undefined;
 }

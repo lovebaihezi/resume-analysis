@@ -4,14 +4,16 @@ import type {
     JobDescriptionStore,
     PendingResumeUpload,
     ResumeAnalysisJob,
-    ResumeExtractionInput,
     ResumeAnalysisQueue,
+    ResumeExtractionInput,
     ResumeStore,
     ResumeUploadRecord,
 } from "./ports";
 import { createResumeId } from "./ids";
+import { DuplicateJobDescriptionError } from "./ports";
 import type {
     JobDescription,
+    JobDescriptionSummary,
     ResumeAnalysis,
     ResumeDocument,
     ResumeMetadata,
@@ -184,12 +186,26 @@ class MemoryResumeStore implements ResumeStore {
 class MemoryJdStore implements JobDescriptionStore {
     readonly records = new Map<string, JobDescription>();
 
-    async save(jd: JobDescription): Promise<void> {
+    async save(jd: JobDescription): Promise<JobDescription> {
+        if (this.records.has(jd.id)) {
+            throw new DuplicateJobDescriptionError(jd.id);
+        }
+
         this.records.set(jd.id, jd);
+
+        return jd;
     }
 
-    async list(): Promise<JobDescription[]> {
-        return [...this.records.values()];
+    async getById(id: string): Promise<JobDescription | undefined> {
+        return this.records.get(id);
+    }
+
+    async listSummaries(): Promise<JobDescriptionSummary[]> {
+        return [...this.records.values()].map((jd) => ({
+            id: jd.id,
+            tags: jd.tags,
+            title: jd.title,
+        }));
     }
 
     async count(): Promise<number> {

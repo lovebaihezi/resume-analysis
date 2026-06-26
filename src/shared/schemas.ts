@@ -1,7 +1,9 @@
 import { type as arkType } from "arktype";
 import type {
     JdAnalyzeResult,
+    JdInfoResult,
     JdListResult,
+    ResumeAnalysis,
     ResumeInfoResult,
     ResumeListResult,
     ResumeStatusResult,
@@ -46,7 +48,7 @@ const skill = arkType({
     "des?": "string",
 });
 
-const resumeAnalysis = arkType({
+export const resumeAnalysisSchema = arkType({
     rawText: "string",
     basic: {
         name: "string",
@@ -84,6 +86,12 @@ const jobDescription = arkType({
     requiredExperiences: "string[]",
 });
 
+const jobDescriptionSummary = arkType({
+    id: "string",
+    tags: "string[]",
+    title: "string",
+});
+
 export const resumeUploadResultSchema = arkType({
     "archivedAt?": "string",
     createdAt: "string",
@@ -108,7 +116,7 @@ export const resumeInfoResultSchema = arkType({
     resumeId: "string",
     status: resumeStatus,
     updatedAt: "string",
-    resume: resumeAnalysis,
+    resume: resumeAnalysisSchema,
 });
 
 export const resumeStatusResultSchema = resumeSummary;
@@ -119,7 +127,11 @@ export const jdAnalyzeResultSchema = arkType({
 
 export const jdListResultSchema = arkType({
     count: "number",
-    jds: jobDescription.array(),
+    jds: jobDescriptionSummary.array(),
+});
+
+export const jdInfoResultSchema = arkType({
+    jd: jobDescription,
 });
 
 export function parseResumeUploadResult(data: unknown): ResumeUploadResult {
@@ -138,10 +150,18 @@ export function parseResumeStatusResult(data: unknown): ResumeStatusResult {
     return resumeStatusResultSchema.assert(data) as ResumeStatusResult;
 }
 
+export function parseResumeAnalysis(data: unknown): ResumeAnalysis {
+    return resumeAnalysisSchema.assert(data) as ResumeAnalysis;
+}
+
 export function parseJdAnalyzeResult(data: unknown): JdAnalyzeResult {
     return jdAnalyzeResultSchema.assert(data) as JdAnalyzeResult;
 }
 
 export function parseJdListResult(data: unknown): JdListResult {
     return jdListResultSchema.assert(data) as JdListResult;
+}
+
+export function parseJdInfoResult(data: unknown): JdInfoResult {
+    return jdInfoResultSchema.assert(data) as JdInfoResult;
 }

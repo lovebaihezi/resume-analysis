@@ -83,6 +83,11 @@
     ],
     "ai": {
         "binding": "AI",
+        "remote": true,
+    },
+    "vars": {
+        "AI_GATEWAY_NAME": "collects-auto-ai",
+        "GEMINI_MODEL": "gemini-3.5-flash",
     },
     /**
      * Smart Placement
