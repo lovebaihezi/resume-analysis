@@ -1,0 +1,4 @@
+interface:
+  display_name: "Commit"
+  short_description: "PNPM validation, commit, PR, and checks workflow"
+  default_prompt: "Use $commit to validate, commit, push, open a PR, and monitor checks."
