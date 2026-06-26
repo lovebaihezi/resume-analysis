@@ -165,3 +165,7 @@ dist
 .env*
 !.env.example
 .wrangler/
+playwright-report/
+test-results/
+tests/browser/__screenshots__/
+.vitest-attachments/

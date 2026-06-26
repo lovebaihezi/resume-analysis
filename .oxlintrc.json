@@ -1,0 +1,14 @@
+{
+    "$schema": "./node_modules/oxlint/configuration_schema.json",
+    "ignorePatterns": [
+        "dist/**",
+        "node_modules/**",
+        "worker-configuration.d.ts",
+        "tests/browser/__screenshots__/**"
+    ],
+    "rules": {
+        "react/react-in-jsx-scope": "off",
+        "react/jsx-key": "error",
+        "typescript/no-unused-vars": "warn"
+    }
+}

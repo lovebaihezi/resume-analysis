@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+@plugin "daisyui" {
+    themes:
+        light --default,
+        dark --prefersdark;
+}
+
+html,
+body,
+#root {
+    min-height: 100%;
+}
+
+body {
+    margin: 0;
+}
+
+.pdf-preview object {
+    pointer-events: none;
+}

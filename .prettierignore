@@ -1,0 +1,6 @@
+dist
+node_modules
+worker-configuration.d.ts
+tests/browser/__screenshots__
+AGENTS.md
+.vscode/settings.json
