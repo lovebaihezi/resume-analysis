@@ -9,7 +9,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { act } from "react";
 import { SWRConfig } from "swr";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../../src/frontend/App";
 
 describe("resume analysis UI behavior", () => {
@@ -26,21 +26,22 @@ describe("resume analysis UI behavior", () => {
         expect(
             within(nav).getByRole("link", { name: /resume analysis/i }),
         ).toBeInTheDocument();
-        const resumeLinks =
-            await within(nav).findAllByText(/uploaded resumes/i);
-        const firstResumeLink = resumeLinks[0];
-        const firstJdLink = within(nav).getAllByText(/jd editor/i)[0];
+        const firstResumeLink = await within(nav).findByRole("link", {
+            name: /uploaded resumes/i,
+        });
+        const firstJdLink = within(nav).getByRole("link", {
+            name: /jd editor/i,
+        });
 
         expect(firstResumeLink).toBeDefined();
         expect(firstJdLink).toBeDefined();
+        expect(within(nav).queryByText(/uploaded resumes/i)).toBeNull();
+        expect(within(nav).queryByText(/jd editor/i)).toBeNull();
         await waitFor(() => {
-            expect(within(nav).getAllByText("1")[0]).toHaveClass("badge");
+            expect(within(firstResumeLink).getByText("1")).toHaveClass("badge");
         });
-        expect(firstResumeLink?.closest("a")).toHaveAttribute(
-            "href",
-            "/resumes",
-        );
-        expect(firstJdLink?.closest("a")).toHaveAttribute("href", "/jd");
+        expect(firstResumeLink).toHaveAttribute("href", "/resumes");
+        expect(firstJdLink).toHaveAttribute("href", "/jd");
     });
 
     it("uploads a PDF from click selection, shows progress, and routes to the id-based detail page", async () => {
@@ -56,13 +57,35 @@ describe("resume analysis UI behavior", () => {
         await waitFor(() => {
             expect(window.location.pathname).toMatch(/^\/resumes\/.+/);
         });
-        expect(await screen.findByText(/raw resume/i)).toBeInTheDocument();
         await waitFor(() => {
             expect(document.body).toHaveTextContent(/100%/);
         });
         expect(
-            screen.getByText("Ava Chen", { selector: "p" }),
+            await screen.findByText("Ava Chen", { selector: "p" }),
         ).toBeInTheDocument();
+    });
+
+    it("opens the file picker from the whole upload drop zone", async () => {
+        await resetBackend();
+        const user = userEvent.setup();
+        renderApp("/");
+        const input = screen.getByLabelText(/choose resume pdf/i);
+        const clickSpy = vi.spyOn(input, "click");
+
+        try {
+            await user.click(screen.getByTestId("resume-dropzone"));
+
+            expect(clickSpy).toHaveBeenCalledOnce();
+        } finally {
+            clickSpy.mockRestore();
+        }
+    });
+
+    it("hides the progress bar until a PDF upload is active", async () => {
+        await resetBackend();
+        renderApp("/");
+
+        expect(screen.queryByRole("progressbar")).toBeNull();
     });
 
     it("shows a resume extraction skeleton while the queued analysis is pending", async () => {
@@ -78,10 +101,7 @@ describe("resume analysis UI behavior", () => {
         expect(
             await screen.findByTestId("resume-extraction-skeleton"),
         ).toBeInTheDocument();
-        expect(screen.getByText("ava-chen.pdf")).toBeInTheDocument();
-        expect(
-            screen.getByRole("heading", { name: /extracting resume/i }),
-        ).toBeInTheDocument();
+        expect(screen.getByText(/analyzing resume/i)).toBeInTheDocument();
         expect(window.location.pathname).toBe("/");
     });
 
@@ -118,6 +138,16 @@ describe("resume analysis UI behavior", () => {
         expect(screen.getByText("No resumes uploaded.")).toBeInTheDocument();
     });
 
+    it("uses an icon-only 404 state for missing resume details", async () => {
+        await resetBackend();
+        renderApp("/resumes/missing");
+
+        expect(
+            await screen.findByRole("img", { name: /404 error/i }),
+        ).toBeInTheDocument();
+        expect(screen.queryByText(/resume not found/i)).toBeNull();
+    });
+
     it("uploads PDFs from drag and paste interactions", async () => {
         await resetBackend();
         renderApp("/");
@@ -133,9 +163,8 @@ describe("resume analysis UI behavior", () => {
         await waitFor(() => {
             expect(window.location.pathname).toMatch(/^\/resumes\/.+/);
         });
-        expect(await screen.findByText(/raw resume/i)).toBeInTheDocument();
         expect(
-            screen.getByText("Ava Chen", { selector: "p" }),
+            await screen.findByText("Ava Chen", { selector: "p" }),
         ).toBeInTheDocument();
 
         cleanup();
@@ -156,9 +185,8 @@ describe("resume analysis UI behavior", () => {
         await waitFor(() => {
             expect(window.location.pathname).toMatch(/^\/resumes\/.+/);
         });
-        expect(await screen.findByText(/raw resume/i)).toBeInTheDocument();
         expect(
-            screen.getByText("Ava Chen", { selector: "p" }),
+            await screen.findByText("Ava Chen", { selector: "p" }),
         ).toBeInTheDocument();
     });
 
@@ -173,6 +201,8 @@ describe("resume analysis UI behavior", () => {
         });
 
         expect(await screen.findByText(/pdf files only/i)).toBeInTheDocument();
+        expect(window.location.pathname).toBe("/");
+        expect(screen.queryByRole("progressbar")).toBeNull();
     });
 
     it("submits a raw JD and displays structured AI output", async () => {
