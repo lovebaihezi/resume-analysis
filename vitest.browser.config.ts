@@ -3,6 +3,7 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { playwright } from "@vitest/browser-playwright";
 import { defineConfig } from "vitest/config";
+import { testBackendPlugin } from "./tests/browser/testBackendPlugin";
 
 const stylex = stylexPlugin({
     dev: true,
@@ -14,7 +15,7 @@ const stylex = stylexPlugin({
 });
 
 export default defineConfig({
-    plugins: [react(), tailwindcss(), stylex],
+    plugins: [react(), tailwindcss(), stylex, testBackendPlugin()],
     test: {
         browser: {
             enabled: true,

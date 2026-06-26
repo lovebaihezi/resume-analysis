@@ -2,10 +2,25 @@ import type {
     AiExtractor,
     AppServices,
     JobDescriptionStore,
+    PendingResumeUpload,
+    ResumeAnalysisJob,
+    ResumeExtractionInput,
+    ResumeAnalysisQueue,
     ResumeStore,
+    ResumeUploadRecord,
 } from "./ports";
-import type { JobDescription, ResumeAnalysis } from "../shared/types";
-import { resumeWriterKey } from "../shared/types";
+import { DuplicateJobDescriptionError } from "./ports";
+import { createResumeId } from "./ids";
+import { normalizeResumeAnalysis } from "./normalization";
+import type {
+    JobDescription,
+    JobDescriptionSummary,
+    ResumeAnalysis,
+    ResumeDocument,
+    ResumeMetadata,
+    ResumeSummary,
+} from "../shared/types";
+import { summarizeResume } from "../shared/types";
 
 const fixtureResume: ResumeAnalysis = {
     rawText:
@@ -63,40 +78,155 @@ const fixtureJd: JobDescription = {
 };
 
 class MemoryResumeStore implements ResumeStore {
-    readonly records = new Map<string, ResumeAnalysis>();
+    readonly pending = new Map<string, PendingResumeUpload>();
+    readonly records = new Map<string, ResumeDocument>();
+    readonly summaries = new Map<string, ResumeSummary>();
 
-    async save(resume: ResumeAnalysis): Promise<void> {
-        this.records.set(resumeWriterKey(resume.basic.name), resume);
+    async createPendingUpload(
+        input: ResumeExtractionInput,
+    ): Promise<ResumeUploadRecord> {
+        const now = new Date().toISOString();
+        const metadata: ResumeMetadata = {
+            createdAt: now,
+            resumeId: createResumeId(),
+            status: "creating",
+            updatedAt: now,
+        };
+
+        this.pending.set(metadata.resumeId, {
+            ...metadata,
+            bytes: new Uint8Array(input.bytes),
+            fileName: input.fileName,
+            source: input.source,
+        });
+        this.summaries.set(metadata.resumeId, {
+            ...metadata,
+            highestEducation: "Unknown",
+            name: "",
+            skills: [],
+            workDuration: "Unknown",
+        });
+
+        return {
+            ...metadata,
+            bytes: input.bytes.byteLength,
+            fileName: input.fileName,
+            source: input.source,
+        };
     }
 
-    async getByName(name: string): Promise<ResumeAnalysis | undefined> {
-        return this.records.get(resumeWriterKey(name));
+    async completePendingAnalysis(
+        resumeId: string,
+        resume: ResumeAnalysis,
+    ): Promise<ResumeDocument> {
+        const normalizedResume = normalizeResumeAnalysis(resume);
+        const pending = this.pending.get(resumeId);
+        const now = new Date().toISOString();
+        const createdAt = pending?.createdAt ?? now;
+        const document: ResumeDocument = {
+            createdAt,
+            resume: normalizedResume,
+            resumeId,
+            status: "ready",
+            updatedAt: now,
+        };
+
+        this.pending.delete(resumeId);
+        this.records.set(document.resumeId, document);
+        this.summaries.set(
+            document.resumeId,
+            summarizeResume(normalizedResume, document),
+        );
+
+        return document;
     }
 
-    async list(): Promise<ResumeAnalysis[]> {
-        return [...this.records.values()];
+    async failPendingAnalysis(resumeId: string): Promise<void> {
+        const existing = this.summaries.get(resumeId);
+
+        if (!existing) {
+            return;
+        }
+
+        this.pending.delete(resumeId);
+        this.summaries.set(resumeId, {
+            ...existing,
+            status: "failed",
+            updatedAt: new Date().toISOString(),
+        });
+    }
+
+    async getById(resumeId: string): Promise<ResumeDocument | undefined> {
+        return this.records.get(resumeId);
+    }
+
+    async getPendingUpload(
+        resumeId: string,
+    ): Promise<PendingResumeUpload | undefined> {
+        const pending = this.pending.get(resumeId);
+
+        return pending
+            ? { ...pending, bytes: new Uint8Array(pending.bytes) }
+            : undefined;
+    }
+
+    async getSummary(resumeId: string): Promise<ResumeSummary | undefined> {
+        return this.summaries.get(resumeId);
+    }
+
+    async listSummaries(): Promise<ResumeSummary[]> {
+        return [...this.summaries.values()].filter(
+            (summary) => summary.status === "ready",
+        );
     }
 
     async count(): Promise<number> {
-        return this.records.size;
+        return (await this.listSummaries()).length;
     }
 }
 
 class MemoryJdStore implements JobDescriptionStore {
-    readonly records = new Map<string, JobDescription>();
+    readonly records = new Map<
+        string,
+        { jd: JobDescription; updatedAt: string }
+    >();
 
-    async save(jd: JobDescription): Promise<void> {
-        this.records.set(jd.id, jd);
+    async save(jd: JobDescription): Promise<JobDescription> {
+        if (this.records.has(jd.id)) {
+            throw new DuplicateJobDescriptionError(jd.id);
+        }
+
+        this.records.set(jd.id, {
+            jd,
+            updatedAt: new Date().toISOString(),
+        });
+
+        return jd;
     }
 
-    async list(): Promise<JobDescription[]> {
-        return [...this.records.values()];
+    async getById(id: string): Promise<JobDescription | undefined> {
+        return this.records.get(id)?.jd;
+    }
+
+    async listSummaries(): Promise<JobDescriptionSummary[]> {
+        return [...this.records.values()].map(({ jd, updatedAt }) => ({
+            id: jd.id,
+            tags: jd.tags,
+            title: jd.title,
+            updatedAt,
+        }));
     }
 
     async count(): Promise<number> {
         return this.records.size;
     }
 }
+
+type TestServicesOptions = {
+    jd?: JobDescription;
+    onExtractResume?: (input: ResumeExtractionInput) => void;
+    resume?: ResumeAnalysis;
+};
 
 class TestAiExtractor implements AiExtractor {
     readonly calls = {
@@ -104,30 +234,45 @@ class TestAiExtractor implements AiExtractor {
         jd: 0,
     };
 
-    async extractResume(): Promise<ResumeAnalysis> {
-        this.calls.resume += 1;
+    constructor(private readonly options: TestServicesOptions = {}) {}
 
-        return fixtureResume;
+    async extractResume(input: ResumeExtractionInput): Promise<ResumeAnalysis> {
+        this.calls.resume += 1;
+        this.options.onExtractResume?.(input);
+
+        return this.options.resume ?? fixtureResume;
     }
 
     async analyzeJobDescription(rawText: string): Promise<JobDescription> {
         this.calls.jd += 1;
 
         return {
-            ...fixtureJd,
+            ...(this.options.jd ?? fixtureJd),
             rawText,
         };
     }
 }
 
-export function createTestServices(): AppServices & {
+class TestResumeAnalysisQueue implements ResumeAnalysisQueue {
+    readonly jobs: ResumeAnalysisJob[] = [];
+
+    async enqueue(job: ResumeAnalysisJob): Promise<void> {
+        this.jobs.push(job);
+    }
+}
+
+export function createTestServices(
+    options: TestServicesOptions = {},
+): AppServices & {
     ai: TestAiExtractor;
     jdStore: MemoryJdStore;
+    resumeAnalysisQueue: TestResumeAnalysisQueue;
     resumeStore: MemoryResumeStore;
 } {
     return {
-        ai: new TestAiExtractor(),
+        ai: new TestAiExtractor(options),
         jdStore: new MemoryJdStore(),
+        resumeAnalysisQueue: new TestResumeAnalysisQueue(),
         resumeStore: new MemoryResumeStore(),
     };
 }

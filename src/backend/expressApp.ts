@@ -1,8 +1,8 @@
 import express from "express";
 import type { ErrorRequestHandler, Request, RequestHandler } from "express";
-import type { AppServices } from "./ports";
+import { DuplicateJobDescriptionError, type AppServices } from "./ports";
 import type { UploadSource } from "../shared/types";
-import { summarizeResume } from "../shared/types";
+import { assertResumePdfPageLimit, PdfPageLimitError } from "./pdf";
 
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 const uploadSources = new Set(["click", "drag", "paste"]);
@@ -34,16 +34,31 @@ export function createApiApp(services: AppServices): express.Express {
                     return;
                 }
 
-                const resume = await services.ai.extractResume({
+                assertResumePdfPageLimit(bytes);
+
+                const upload = await services.resumeStore.createPendingUpload({
                     bytes,
                     fileName,
                     source,
                 });
 
-                await services.resumeStore.save(resume);
+                try {
+                    await services.resumeAnalysisQueue.enqueue({
+                        resumeId: upload.resumeId,
+                    });
+                } catch (error) {
+                    await services.resumeStore.failPendingAnalysis(
+                        upload.resumeId,
+                    );
+                    throw error;
+                }
 
-                res.status(201).json({
-                    resume,
+                res.status(202).json({
+                    archivedAt: upload.archivedAt,
+                    createdAt: upload.createdAt,
+                    resumeId: upload.resumeId,
+                    status: upload.status,
+                    updatedAt: upload.updatedAt,
                     upload: {
                         bytes: bytes.byteLength,
                         percent: 100,
@@ -51,6 +66,15 @@ export function createApiApp(services: AppServices): express.Express {
                     },
                 });
             } catch (error) {
+                if (error instanceof PdfPageLimitError) {
+                    res.status(
+                        error.code === "too_many_pages" ? 413 : 422,
+                    ).json({
+                        error: error.message,
+                    });
+                    return;
+                }
+
                 res.status(500).json({
                     error:
                         error instanceof Error
@@ -64,27 +88,42 @@ export function createApiApp(services: AppServices): express.Express {
     app.get(
         "/api/resumes",
         asyncHandler(async (_req, res) => {
-            const resumes = await services.resumeStore.list();
+            const resumes = await services.resumeStore.listSummaries();
 
             res.json({
                 count: resumes.length,
-                resumes: resumes.map(summarizeResume),
+                resumes,
             });
         }),
     );
 
     app.get(
-        "/api/resumes/info/:name",
+        "/api/resumes/:resumeId/status",
         asyncHandler(async (req, res) => {
-            const name = String(req.params.name ?? "");
-            const resume = await services.resumeStore.getByName(name);
+            const resumeId = String(req.params.resumeId ?? "");
+            const summary = await services.resumeStore.getSummary(resumeId);
 
-            if (!resume) {
+            if (!summary) {
                 res.status(404).json({ error: "Resume not found" });
                 return;
             }
 
-            res.json({ resume });
+            res.json(summary);
+        }),
+    );
+
+    app.get(
+        "/api/resumes/:resumeId",
+        asyncHandler(async (req, res) => {
+            const resumeId = String(req.params.resumeId ?? "");
+            const document = await services.resumeStore.getById(resumeId);
+
+            if (!document) {
+                res.status(404).json({ error: "Resume not found" });
+                return;
+            }
+
+            res.json(document);
         }),
     );
 
@@ -104,21 +143,36 @@ export function createApiApp(services: AppServices): express.Express {
             }
 
             const jd = await services.ai.analyzeJobDescription(rawText);
-            await services.jdStore.save(jd);
+            const stored = await services.jdStore.save(jd);
 
-            res.status(201).json({ jd });
+            res.status(201).json({ jd: stored });
         }),
     );
 
     app.get(
         "/api/jds",
         asyncHandler(async (_req, res) => {
-            const jds = await services.jdStore.list();
+            const jds = await services.jdStore.listSummaries();
 
             res.json({
                 count: jds.length,
                 jds,
             });
+        }),
+    );
+
+    app.get(
+        "/api/jds/:id",
+        asyncHandler(async (req, res) => {
+            const id = String(req.params.id ?? "");
+            const jd = await services.jdStore.getById(id);
+
+            if (!jd) {
+                res.status(404).json({ error: "Job description not found" });
+                return;
+            }
+
+            res.json({ jd });
         }),
     );
 
@@ -134,6 +188,11 @@ function asyncHandler(handler: RequestHandler): RequestHandler {
 }
 
 const jsonErrorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
+    if (error instanceof DuplicateJobDescriptionError) {
+        res.status(409).json({ error: error.message });
+        return;
+    }
+
     res.status(500).json({
         error: error instanceof Error ? error.message : "Internal server error",
     });
@@ -158,6 +217,14 @@ function readUploadSource(req: Request): UploadSource {
 function toBytes(body: unknown): Uint8Array {
     if (body instanceof Uint8Array) {
         return body;
+    }
+
+    if (body instanceof ArrayBuffer) {
+        return new Uint8Array(body);
+    }
+
+    if (ArrayBuffer.isView(body)) {
+        return new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
     }
 
     if (typeof body === "string") {

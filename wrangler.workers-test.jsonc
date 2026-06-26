@@ -1,0 +1,54 @@
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    "name": "resume-analyze-workers-test",
+    "main": "src/index.ts",
+    "compatibility_date": "2026-06-26",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [
+            {
+                "name": "RESUME_REGISTRY",
+                "class_name": "ResumeRegistryObject",
+            },
+            {
+                "name": "RESUME_DOCUMENT",
+                "class_name": "ResumeDocumentObject",
+            },
+            {
+                "name": "JD_STORE",
+                "class_name": "JobDescriptionStoreObject",
+            },
+        ],
+    },
+    "queues": {
+        "producers": [
+            {
+                "binding": "RESUME_ANALYSIS_QUEUE",
+                "queue": "resume-analysis-jobs",
+            },
+        ],
+    },
+    "migrations": [
+        {
+            "tag": "v1",
+            "new_sqlite_classes": [
+                "ResumeObject",
+                "ResumeIndexObject",
+                "JobDescriptionObject",
+                "JobDescriptionIndexObject",
+            ],
+        },
+        {
+            "tag": "v2",
+            "new_sqlite_classes": [
+                "ResumeRegistryObject",
+                "ResumeDocumentObject",
+                "JobDescriptionStoreObject",
+            ],
+        },
+    ],
+    "vars": {
+        "AI_GATEWAY_NAME": "collects-auto-ai",
+        "GEMINI_MODEL": "gemini-3.5-flash",
+    },
+}

@@ -51,11 +51,25 @@ export type ResumeAnalysis = {
     skills: Skill[];
 };
 
-export type ResumeSummary = {
+export type ResumeStatus = "creating" | "ready" | "failed" | "archived";
+
+export type ResumeMetadata = {
+    archivedAt?: string;
+    createdAt: string;
+    resumeId: string;
+    status: ResumeStatus;
+    updatedAt: string;
+};
+
+export type ResumeSummary = ResumeMetadata & {
     name: string;
     workDuration: string;
     highestEducation: string;
     skills: string[];
+};
+
+export type ResumeDocument = ResumeMetadata & {
+    resume: ResumeAnalysis;
 };
 
 export type JobDescription = {
@@ -68,8 +82,14 @@ export type JobDescription = {
     requiredExperiences: string[];
 };
 
-export type ResumeUploadResult = {
-    resume: ResumeAnalysis;
+export type JobDescriptionSummary = {
+    id: string;
+    tags: string[];
+    title: string;
+    updatedAt: string;
+};
+
+export type ResumeUploadResult = ResumeMetadata & {
     upload: {
         bytes: number;
         percent: number;
@@ -82,9 +102,9 @@ export type ResumeListResult = {
     resumes: ResumeSummary[];
 };
 
-export type ResumeInfoResult = {
-    resume: ResumeAnalysis;
-};
+export type ResumeStatusResult = ResumeSummary;
+
+export type ResumeInfoResult = ResumeDocument;
 
 export type JdAnalyzeResult = {
     jd: JobDescription;
@@ -92,7 +112,11 @@ export type JdAnalyzeResult = {
 
 export type JdListResult = {
     count: number;
-    jds: JobDescription[];
+    jds: JobDescriptionSummary[];
+};
+
+export type JdInfoResult = {
+    jd: JobDescription;
 };
 
 const degreeRank = new Map([
@@ -113,7 +137,10 @@ export function resumeWriterSlug(name: string): string {
     return encodeURIComponent(resumeWriterKey(name));
 }
 
-export function summarizeResume(resume: ResumeAnalysis): ResumeSummary {
+export function summarizeResume(
+    resume: ResumeAnalysis,
+    metadata: ResumeMetadata,
+): ResumeSummary {
     const workDates = resume.work
         .flatMap((work) => work.duration)
         .filter(Boolean)
@@ -130,6 +157,7 @@ export function summarizeResume(resume: ResumeAnalysis): ResumeSummary {
             })[0] ?? "Unknown";
 
     return {
+        ...metadata,
         name: resume.basic.name,
         workDuration:
             workDates.length > 1

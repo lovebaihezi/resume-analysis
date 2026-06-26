@@ -1,16 +1,20 @@
 import type {
     JdAnalyzeResult,
+    JdInfoResult,
     JdListResult,
     ResumeInfoResult,
     ResumeListResult,
+    ResumeStatusResult,
     ResumeUploadResult,
     UploadSource,
 } from "../shared/types";
 import {
     parseJdAnalyzeResult,
+    parseJdInfoResult,
     parseJdListResult,
     parseResumeInfoResult,
     parseResumeListResult,
+    parseResumeStatusResult,
     parseResumeUploadResult,
 } from "../shared/schemas";
 
@@ -29,9 +33,11 @@ export interface ApiClient {
         onProgress: (progress: UploadProgress) => void,
     ): Promise<ResumeUploadResult>;
     listResumes(): Promise<ResumeListResult>;
-    getResumeInfo(name: string): Promise<ResumeInfoResult>;
+    getResumeInfo(resumeId: string): Promise<ResumeInfoResult>;
+    getResumeStatus(resumeId: string): Promise<ResumeStatusResult>;
     analyzeJd(rawText: string): Promise<JdAnalyzeResult>;
     listJds(): Promise<JdListResult>;
+    getJdInfo(id: string): Promise<JdInfoResult>;
 }
 
 export const browserApiClient: ApiClient = {
@@ -73,9 +79,16 @@ export const browserApiClient: ApiClient = {
     async listResumes() {
         return parseResumeListResult(await getJson("/api/resumes"));
     },
-    async getResumeInfo(name) {
+    async getResumeInfo(resumeId) {
         return parseResumeInfoResult(
-            await getJson(`/api/resumes/info/${encodeURIComponent(name)}`),
+            await getJson(`/api/resumes/${encodeURIComponent(resumeId)}`),
+        );
+    },
+    async getResumeStatus(resumeId) {
+        return parseResumeStatusResult(
+            await getJson(
+                `/api/resumes/${encodeURIComponent(resumeId)}/status`,
+            ),
         );
     },
     async analyzeJd(rawText) {
@@ -87,6 +100,11 @@ export const browserApiClient: ApiClient = {
     },
     async listJds() {
         return parseJdListResult(await getJson("/api/jds"));
+    },
+    async getJdInfo(id) {
+        return parseJdInfoResult(
+            await getJson(`/api/jds/${encodeURIComponent(id)}`),
+        );
     },
 };
 
