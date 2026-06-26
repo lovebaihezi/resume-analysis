@@ -38,3 +38,7 @@ Cloudflare credentials for the remote dev session.
 The Durable Object classes and migrations are already declared in
 `wrangler.jsonc`. The GitHub Actions deploy workflow expects
 `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` secrets.
+
+Workers AI calls are routed through the AI Gateway ID configured as
+`AI_GATEWAY_ID` in `wrangler.jsonc`. Create a gateway with that ID in the
+Cloudflare dashboard, or change the var to match the existing gateway ID.

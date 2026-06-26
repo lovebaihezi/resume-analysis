@@ -3,6 +3,7 @@ import type {
     ResumeAnalysis,
     UploadSource,
 } from "../shared/types";
+import type { ObservabilityContext } from "./observability";
 
 export type ResumeExtractionInput = {
     fileName: string;
@@ -11,21 +12,30 @@ export type ResumeExtractionInput = {
 };
 
 export interface ResumeStore {
-    save(resume: ResumeAnalysis): Promise<void>;
-    getByName(name: string): Promise<ResumeAnalysis | undefined>;
-    list(): Promise<ResumeAnalysis[]>;
-    count(): Promise<number>;
+    save(resume: ResumeAnalysis, context?: ObservabilityContext): Promise<void>;
+    getByName(
+        name: string,
+        context?: ObservabilityContext,
+    ): Promise<ResumeAnalysis | undefined>;
+    list(context?: ObservabilityContext): Promise<ResumeAnalysis[]>;
+    count(context?: ObservabilityContext): Promise<number>;
 }
 
 export interface JobDescriptionStore {
-    save(jd: JobDescription): Promise<void>;
-    list(): Promise<JobDescription[]>;
-    count(): Promise<number>;
+    save(jd: JobDescription, context?: ObservabilityContext): Promise<void>;
+    list(context?: ObservabilityContext): Promise<JobDescription[]>;
+    count(context?: ObservabilityContext): Promise<number>;
 }
 
 export interface AiExtractor {
-    extractResume(input: ResumeExtractionInput): Promise<ResumeAnalysis>;
-    analyzeJobDescription(rawText: string): Promise<JobDescription>;
+    extractResume(
+        input: ResumeExtractionInput,
+        context?: ObservabilityContext,
+    ): Promise<ResumeAnalysis>;
+    analyzeJobDescription(
+        rawText: string,
+        context?: ObservabilityContext,
+    ): Promise<JobDescription>;
 }
 
 export type AppServices = {
