@@ -1,6 +1,6 @@
 import express from "express";
 import type { ErrorRequestHandler, Request, RequestHandler } from "express";
-import type { AppServices } from "./ports";
+import { DuplicateJobDescriptionError, type AppServices } from "./ports";
 import type { UploadSource } from "../shared/types";
 import { summarizeResume } from "../shared/types";
 
@@ -104,21 +104,36 @@ export function createApiApp(services: AppServices): express.Express {
             }
 
             const jd = await services.ai.analyzeJobDescription(rawText);
-            await services.jdStore.save(jd);
+            const stored = await services.jdStore.save(jd);
 
-            res.status(201).json({ jd });
+            res.status(201).json({ jd: stored });
         }),
     );
 
     app.get(
         "/api/jds",
         asyncHandler(async (_req, res) => {
-            const jds = await services.jdStore.list();
+            const jds = await services.jdStore.listSummaries();
 
             res.json({
                 count: jds.length,
                 jds,
             });
+        }),
+    );
+
+    app.get(
+        "/api/jds/:id",
+        asyncHandler(async (req, res) => {
+            const id = String(req.params.id ?? "");
+            const jd = await services.jdStore.getById(id);
+
+            if (!jd) {
+                res.status(404).json({ error: "Job description not found" });
+                return;
+            }
+
+            res.json({ jd });
         }),
     );
 
@@ -134,6 +149,11 @@ function asyncHandler(handler: RequestHandler): RequestHandler {
 }
 
 const jsonErrorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
+    if (error instanceof DuplicateJobDescriptionError) {
+        res.status(409).json({ error: error.message });
+        return;
+    }
+
     res.status(500).json({
         error: error instanceof Error ? error.message : "Internal server error",
     });

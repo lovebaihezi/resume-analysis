@@ -68,5 +68,30 @@ describe("resume and JD API behavior", () => {
         expect(list.status).toBe(200);
         expect(list.body.count).toBe(1);
         expect(list.body.jds[0].title).toBe("Senior Frontend Engineer");
+        expect(list.body.jds[0]).not.toHaveProperty("rawText");
+
+        const detail = await request(app).get(
+            "/api/jds/senior-frontend-engineer",
+        );
+        expect(detail.status).toBe(200);
+        expect(detail.body.jd.requiredSkills).toContain("React");
+    });
+
+    it("rejects duplicate job description ids", async () => {
+        const services = createTestServices();
+        const app = createApiApp(services);
+        const rawText =
+            "Senior frontend engineer role requiring React, XState, Cloudflare Workers, and accessibility experience.";
+
+        const first = await request(app)
+            .post("/api/jds/analyze")
+            .send({ rawText });
+        const duplicate = await request(app)
+            .post("/api/jds/analyze")
+            .send({ rawText });
+
+        expect(first.status).toBe(201);
+        expect(duplicate.status).toBe(409);
+        expect(duplicate.body.error).toMatch(/already exists/i);
     });
 });
