@@ -44,7 +44,9 @@ Cloudflare credentials for the remote dev session.
 The Durable Object classes, Queues, Workers AI binding, and non-secret AI
 Gateway settings are already declared in `wrangler.jsonc`. Resume extraction
 uses the `collects-auto-ai` gateway with Google AI Studio BYOK configured in
-Cloudflare, so the app does not need a local `CF_AIG_TOKEN`. The GitHub Actions
-PR checks and deploy workflow expect `CLOUDFLARE_ACCOUNT_ID` and
+Cloudflare, so the app does not need a local `CF_AIG_TOKEN`. AI Gateway request
+and response payload logging is suppressed per request while request IDs, task
+metadata, and timing logs are retained for tracing. The GitHub Actions PR checks
+and deploy workflow expect `CLOUDFLARE_ACCOUNT_ID` and
 `CLOUDFLARE_API_TOKEN` secrets. The token must be able to run the Worker with
 remote bindings and use the configured AI resources.

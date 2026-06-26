@@ -9,6 +9,7 @@
     "compatibility_date": "2026-06-26",
     "observability": {
         "enabled": true,
+        "head_sampling_rate": 1,
     },
     "upload_source_maps": true,
     "compatibility_flags": ["nodejs_compat"],
@@ -83,7 +84,7 @@
         "remote": true,
     },
     "vars": {
-        "AI_GATEWAY_NAME": "collects-auto-ai",
+        "AI_GATEWAY_ID": "collects-auto-ai",
         "GEMINI_MODEL": "gemini-3.5-flash",
     },
     /**

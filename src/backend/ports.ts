@@ -7,6 +7,7 @@ import type {
     UploadSource,
     ResumeSummary,
 } from "../shared/types";
+import type { ObservabilityContext } from "./observability";
 
 export type ResumeExtractionInput = {
     fileName: string;
@@ -23,6 +24,7 @@ export type ResumeUploadRecord = ResumeMetadata & {
 };
 
 export type ResumeAnalysisJob = {
+    requestId?: string;
     resumeId: string;
 };
 
@@ -31,34 +33,63 @@ export interface ResumeStore {
     completePendingAnalysis(
         resumeId: string,
         resume: ResumeAnalysis,
+        context?: ObservabilityContext,
     ): Promise<ResumeDocument>;
     createPendingUpload(
         input: ResumeExtractionInput,
+        context?: ObservabilityContext,
     ): Promise<ResumeUploadRecord>;
-    failPendingAnalysis(resumeId: string): Promise<void>;
-    getById(resumeId: string): Promise<ResumeDocument | undefined>;
+    failPendingAnalysis(
+        resumeId: string,
+        context?: ObservabilityContext,
+    ): Promise<void>;
+    getById(
+        resumeId: string,
+        context?: ObservabilityContext,
+    ): Promise<ResumeDocument | undefined>;
     getPendingUpload(
         resumeId: string,
+        context?: ObservabilityContext,
     ): Promise<PendingResumeUpload | undefined>;
-    getSummary(resumeId: string): Promise<ResumeSummary | undefined>;
-    listSummaries(): Promise<ResumeSummary[]>;
-    count(): Promise<number>;
+    getSummary(
+        resumeId: string,
+        context?: ObservabilityContext,
+    ): Promise<ResumeSummary | undefined>;
+    listSummaries(context?: ObservabilityContext): Promise<ResumeSummary[]>;
+    count(context?: ObservabilityContext): Promise<number>;
 }
 
 export interface JobDescriptionStore {
-    save(jd: JobDescription): Promise<JobDescription>;
-    getById(id: string): Promise<JobDescription | undefined>;
-    listSummaries(): Promise<JobDescriptionSummary[]>;
-    count(): Promise<number>;
+    save(
+        jd: JobDescription,
+        context?: ObservabilityContext,
+    ): Promise<JobDescription>;
+    getById(
+        id: string,
+        context?: ObservabilityContext,
+    ): Promise<JobDescription | undefined>;
+    listSummaries(
+        context?: ObservabilityContext,
+    ): Promise<JobDescriptionSummary[]>;
+    count(context?: ObservabilityContext): Promise<number>;
 }
 
 export interface AiExtractor {
-    extractResume(input: ResumeExtractionInput): Promise<ResumeAnalysis>;
-    analyzeJobDescription(rawText: string): Promise<JobDescription>;
+    extractResume(
+        input: ResumeExtractionInput,
+        context?: ObservabilityContext,
+    ): Promise<ResumeAnalysis>;
+    analyzeJobDescription(
+        rawText: string,
+        context?: ObservabilityContext,
+    ): Promise<JobDescription>;
 }
 
 export interface ResumeAnalysisQueue {
-    enqueue(job: ResumeAnalysisJob): Promise<void>;
+    enqueue(
+        job: ResumeAnalysisJob,
+        context?: ObservabilityContext,
+    ): Promise<void>;
 }
 
 export type AppServices = {

@@ -1,8 +1,23 @@
 import express from "express";
-import type { ErrorRequestHandler, Request, RequestHandler } from "express";
+import type {
+    ErrorRequestHandler,
+    Request,
+    RequestHandler,
+    Response,
+} from "express";
 import { DuplicateJobDescriptionError, type AppServices } from "./ports";
-import type { UploadSource } from "../shared/types";
+import {
+    contextMetadata,
+    createRequestContext,
+    durationMs,
+    logError,
+    logInfo,
+    REQUEST_ID_HEADER,
+    sha256Hex,
+    type ObservabilityContext,
+} from "./observability";
 import { assertResumePdfPageLimit, PdfPageLimitError } from "./pdf";
+import type { UploadSource } from "../shared/types";
 
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 const uploadSources = new Set(["click", "drag", "paste"]);
@@ -10,6 +25,7 @@ const uploadSources = new Set(["click", "drag", "paste"]);
 export function createApiApp(services: AppServices): express.Express {
     const app = express();
 
+    app.use(requestObservability);
     app.use("/api/jds", express.json({ limit: "2mb" }));
 
     app.get("/api/health", (_req, res) => {
@@ -23,35 +39,95 @@ export function createApiApp(services: AppServices): express.Express {
             type: ["application/pdf", "application/octet-stream", "*/*"],
         }),
         asyncHandler(async (req, res) => {
+            const context = responseContext(res);
+
             try {
                 const fileName = header(req, "x-file-name") ?? "resume.pdf";
                 const source = readUploadSource(req);
                 const contentType = header(req, "content-type") ?? "";
                 const bytes = toBytes(req.body);
+                const fileNameHash = await sha256Hex(fileName);
+                const inputHash = await sha256Hex(bytes);
+                const uploadMetadata = {
+                    content_type: contentType,
+                    file_extension: fileExtension(fileName),
+                    file_name_sha256: fileNameHash,
+                    input_bytes: bytes.byteLength,
+                    input_sha256: inputHash,
+                    upload_source: source,
+                };
 
                 if (!isPdf(fileName, contentType, bytes)) {
-                    res.status(415).json({ error: "PDF files only" });
+                    logInfo(
+                        "resume.upload.rejected",
+                        contextMetadata(context, {
+                            ...uploadMetadata,
+                            reason: "invalid_pdf",
+                        }),
+                    );
+                    sendError(res, 415, "PDF files only");
                     return;
                 }
 
-                assertResumePdfPageLimit(bytes);
-
-                const upload = await services.resumeStore.createPendingUpload({
-                    bytes,
-                    fileName,
-                    source,
-                });
-
                 try {
-                    await services.resumeAnalysisQueue.enqueue({
-                        resumeId: upload.resumeId,
-                    });
+                    assertResumePdfPageLimit(bytes);
                 } catch (error) {
-                    await services.resumeStore.failPendingAnalysis(
-                        upload.resumeId,
+                    logInfo(
+                        "resume.upload.rejected",
+                        contextMetadata(context, {
+                            ...uploadMetadata,
+                            reason:
+                                error instanceof PdfPageLimitError
+                                    ? error.code
+                                    : "pdf_validation_failed",
+                        }),
                     );
                     throw error;
                 }
+
+                logInfo(
+                    "resume.upload.accepted",
+                    contextMetadata(context, uploadMetadata),
+                );
+
+                const upload = await services.resumeStore.createPendingUpload(
+                    {
+                        bytes,
+                        fileName,
+                        source,
+                    },
+                    context,
+                );
+
+                try {
+                    await services.resumeAnalysisQueue.enqueue(
+                        {
+                            requestId: context.requestId,
+                            resumeId: upload.resumeId,
+                        },
+                        context,
+                    );
+                } catch (error) {
+                    await services.resumeStore.failPendingAnalysis(
+                        upload.resumeId,
+                        context,
+                    );
+                    logError(
+                        "resume.analysis.enqueue_failed",
+                        contextMetadata(context, {
+                            resume_id: upload.resumeId,
+                        }),
+                        error,
+                    );
+                    throw error;
+                }
+
+                logInfo(
+                    "resume.analysis.enqueued",
+                    contextMetadata(context, {
+                        resume_id: upload.resumeId,
+                    }),
+                );
 
                 res.status(202).json({
                     archivedAt: upload.archivedAt,
@@ -67,20 +143,26 @@ export function createApiApp(services: AppServices): express.Express {
                 });
             } catch (error) {
                 if (error instanceof PdfPageLimitError) {
-                    res.status(
+                    sendError(
+                        res,
                         error.code === "too_many_pages" ? 413 : 422,
-                    ).json({
-                        error: error.message,
-                    });
+                        error.message,
+                    );
                     return;
                 }
 
-                res.status(500).json({
-                    error:
-                        error instanceof Error
-                            ? error.message
-                            : "Failed to analyze resume",
-                });
+                logError(
+                    "resume.analysis.failed",
+                    contextMetadata(context),
+                    error,
+                );
+                sendError(
+                    res,
+                    500,
+                    error instanceof Error
+                        ? error.message
+                        : "Failed to analyze resume",
+                );
             }
         }),
     );
@@ -88,7 +170,15 @@ export function createApiApp(services: AppServices): express.Express {
     app.get(
         "/api/resumes",
         asyncHandler(async (_req, res) => {
-            const resumes = await services.resumeStore.listSummaries();
+            const context = responseContext(res);
+            const resumes = await services.resumeStore.listSummaries(context);
+
+            logInfo(
+                "resume.list.completed",
+                contextMetadata(context, {
+                    resume_count: resumes.length,
+                }),
+            );
 
             res.json({
                 count: resumes.length,
@@ -115,13 +205,31 @@ export function createApiApp(services: AppServices): express.Express {
     app.get(
         "/api/resumes/:resumeId/status",
         asyncHandler(async (req, res) => {
+            const context = responseContext(res);
             const resumeId = String(req.params.resumeId ?? "");
-            const summary = await services.resumeStore.getSummary(resumeId);
+            const summary = await services.resumeStore.getSummary(
+                resumeId,
+                context,
+            );
 
             if (!summary) {
-                res.status(404).json({ error: "Resume not found" });
+                logInfo(
+                    "resume.status.not_found",
+                    contextMetadata(context, {
+                        resume_id: resumeId,
+                    }),
+                );
+                sendError(res, 404, "Resume not found");
                 return;
             }
+
+            logInfo(
+                "resume.status.completed",
+                contextMetadata(context, {
+                    resume_id: resumeId,
+                    resume_status: summary.status,
+                }),
+            );
 
             res.json(summary);
         }),
@@ -130,13 +238,31 @@ export function createApiApp(services: AppServices): express.Express {
     app.get(
         "/api/resumes/:resumeId",
         asyncHandler(async (req, res) => {
+            const context = responseContext(res);
             const resumeId = String(req.params.resumeId ?? "");
-            const document = await services.resumeStore.getById(resumeId);
+            const document = await services.resumeStore.getById(
+                resumeId,
+                context,
+            );
 
             if (!document) {
-                res.status(404).json({ error: "Resume not found" });
+                logInfo(
+                    "resume.lookup.not_found",
+                    contextMetadata(context, {
+                        resume_id: resumeId,
+                    }),
+                );
+                sendError(res, 404, "Resume not found");
                 return;
             }
+
+            logInfo(
+                "resume.lookup.completed",
+                contextMetadata(context, {
+                    resume_id: resumeId,
+                    resume_status: document.status,
+                }),
+            );
 
             res.json(document);
         }),
@@ -145,20 +271,47 @@ export function createApiApp(services: AppServices): express.Express {
     app.post(
         "/api/jds/analyze",
         asyncHandler(async (req, res) => {
+            const context = responseContext(res);
             const rawText =
                 typeof req.body?.rawText === "string"
                     ? req.body.rawText.trim()
                     : "";
 
             if (!rawText) {
-                res.status(400).json({
-                    error: "Job description text is required",
-                });
+                logInfo(
+                    "jd.analysis.rejected",
+                    contextMetadata(context, {
+                        reason: "missing_raw_text",
+                    }),
+                );
+                sendError(res, 400, "Job description text is required");
                 return;
             }
 
-            const jd = await services.ai.analyzeJobDescription(rawText);
-            const stored = await services.jdStore.save(jd);
+            logInfo(
+                "jd.analysis.accepted",
+                contextMetadata(context, {
+                    input_chars: rawText.length,
+                    input_sha256: await sha256Hex(rawText),
+                }),
+            );
+
+            const jd = await services.ai.analyzeJobDescription(
+                rawText,
+                context,
+            );
+            const stored = await services.jdStore.save(jd, context);
+
+            logInfo(
+                "jd.analysis.stored",
+                contextMetadata(context, {
+                    jd_id_sha256: await sha256Hex(stored.id),
+                    required_experience_count:
+                        stored.requiredExperiences.length,
+                    required_skill_count: stored.requiredSkills.length,
+                    tag_count: stored.tags.length,
+                }),
+            );
 
             res.status(201).json({ jd: stored });
         }),
@@ -167,7 +320,15 @@ export function createApiApp(services: AppServices): express.Express {
     app.get(
         "/api/jds",
         asyncHandler(async (_req, res) => {
-            const jds = await services.jdStore.listSummaries();
+            const context = responseContext(res);
+            const jds = await services.jdStore.listSummaries(context);
+
+            logInfo(
+                "jd.list.completed",
+                contextMetadata(context, {
+                    jd_count: jds.length,
+                }),
+            );
 
             res.json({
                 count: jds.length,
@@ -179,13 +340,27 @@ export function createApiApp(services: AppServices): express.Express {
     app.get(
         "/api/jds/:id",
         asyncHandler(async (req, res) => {
+            const context = responseContext(res);
             const id = String(req.params.id ?? "");
-            const jd = await services.jdStore.getById(id);
+            const jd = await services.jdStore.getById(id, context);
 
             if (!jd) {
-                res.status(404).json({ error: "Job description not found" });
+                logInfo(
+                    "jd.lookup.not_found",
+                    contextMetadata(context, {
+                        jd_id_sha256: await sha256Hex(id),
+                    }),
+                );
+                sendError(res, 404, "Job description not found");
                 return;
             }
+
+            logInfo(
+                "jd.lookup.completed",
+                contextMetadata(context, {
+                    jd_id_sha256: await sha256Hex(id),
+                }),
+            );
 
             res.json({ jd });
         }),
@@ -203,15 +378,73 @@ function asyncHandler(handler: RequestHandler): RequestHandler {
 }
 
 const jsonErrorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
+    const context = responseContext(res);
+
+    logError("api.request.failed", contextMetadata(context), error);
+
     if (error instanceof DuplicateJobDescriptionError) {
-        res.status(409).json({ error: error.message });
+        sendError(res, 409, error.message);
         return;
     }
 
-    res.status(500).json({
-        error: error instanceof Error ? error.message : "Internal server error",
-    });
+    sendError(
+        res,
+        500,
+        error instanceof Error ? error.message : "Internal server error",
+    );
 };
+
+function requestObservability(
+    req: Request,
+    res: Response,
+    next: () => void,
+): void {
+    const startedAt = Date.now();
+    const context = createRequestContext({
+        method: req.method,
+        requestId: header(req, REQUEST_ID_HEADER),
+        route: routeLabel(req),
+    });
+
+    res.locals.observability = context;
+    res.setHeader(REQUEST_ID_HEADER, context.requestId);
+
+    logInfo(
+        "api.request.start",
+        contextMetadata(context, {
+            content_length: header(req, "content-length") ?? null,
+            content_type: header(req, "content-type") ?? null,
+        }),
+    );
+
+    res.on("finish", () => {
+        logInfo(
+            "api.request.complete",
+            contextMetadata(context, {
+                duration_ms: durationMs(startedAt),
+                status_code: res.statusCode,
+            }),
+        );
+    });
+
+    next();
+}
+
+function responseContext(res: Response): ObservabilityContext {
+    return (
+        (res.locals.observability as ObservabilityContext | undefined) ??
+        createRequestContext({})
+    );
+}
+
+function sendError(res: Response, status: number, message: string): void {
+    const requestId = responseContext(res).requestId;
+
+    res.status(status).json({
+        error: message,
+        requestId,
+    });
+}
 
 function header(req: Request, name: string): string | undefined {
     const value = req.headers[name];
@@ -227,6 +460,12 @@ function readUploadSource(req: Request): UploadSource {
     const source = header(req, "x-upload-source");
 
     return uploadSources.has(source ?? "") ? (source as UploadSource) : "click";
+}
+
+function fileExtension(fileName: string): string {
+    const [, extension = ""] = fileName.toLowerCase().match(/\.([^.]+)$/) ?? [];
+
+    return extension.slice(0, 20);
 }
 
 function toBytes(body: unknown): Uint8Array {
@@ -259,4 +498,32 @@ function isPdf(
     const pdfHeader = new TextDecoder().decode(bytes.slice(0, 5));
 
     return (hasPdfName || hasPdfType) && pdfHeader === "%PDF-";
+}
+
+function routeLabel(req: Request): string {
+    if (req.path === "/api/resumes/analyze") {
+        return req.path;
+    }
+
+    if (req.path === "/api/resumes") {
+        return req.path;
+    }
+
+    if (req.path.startsWith("/api/resumes/") && req.path.endsWith("/status")) {
+        return "/api/resumes/:resumeId/status";
+    }
+
+    if (req.path.startsWith("/api/resumes/")) {
+        return "/api/resumes/:resumeId";
+    }
+
+    if (req.path === "/api/jds/analyze" || req.path === "/api/jds") {
+        return req.path;
+    }
+
+    if (req.path.startsWith("/api/jds/")) {
+        return "/api/jds/:id";
+    }
+
+    return req.path;
 }

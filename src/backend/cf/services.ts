@@ -11,6 +11,16 @@ import type {
 } from "../ports";
 import { DuplicateJobDescriptionError } from "../ports";
 import { createResumeId } from "../ids";
+import {
+    contextMetadata,
+    durationMs,
+    gatewayMetadata,
+    type LogMetadata,
+    logError,
+    logInfo,
+    sha256Hex,
+    type ObservabilityContext,
+} from "../observability";
 import { normalizeResumeAnalysis } from "../normalization";
 import { parseResumeAnalysis } from "../../shared/schemas";
 import type {
@@ -35,6 +45,9 @@ const GOOGLE_AI_STUDIO_PROVIDER = "google-ai-studio";
 const MAX_RESUME_MARKDOWN_CHARS = 3_500;
 const JD_EXTRACTION_MAX_TOKENS = 2048;
 const GEMINI_RESUME_MAX_OUTPUT_TOKENS = 4096;
+const JD_PROMPT_VERSION = "jd-extract-v1";
+const RESUME_PROMPT_VERSION = "resume-extract-v1";
+const RESUME_SCHEMA_VERSION = "resume-analysis-v1";
 const RESUME_SECTION_PATTERN =
     /(?:^|\n)(?:#{1,6}\s*)?(Education|Work Experience|Open-Source Contributions|Research Experience|Projects?|Skills)\b[^\n]*(?:\n[\s\S]*?)(?=\n(?:#{1,6}\s*)?(?:Education|Work Experience|Open-Source Contributions|Research Experience|Projects?|Skills)\b|$)/gi;
 const RESUME_REGISTRY_NAME = "__resume_registry__";
@@ -158,8 +171,18 @@ const RESUME_ANALYSIS_RESPONSE_SCHEMA = {
     type: "OBJECT",
 } as const;
 
-export type CloudflareEnv = Env & {
+export type CloudflareEnv = Omit<
+    Env,
+    | "AI"
+    | "AI_GATEWAY_ID"
+    | "GEMINI_MODEL"
+    | "JD_STORE"
+    | "RESUME_ANALYSIS_QUEUE"
+    | "RESUME_DOCUMENT"
+    | "RESUME_REGISTRY"
+> & {
     AI: Ai;
+    AI_GATEWAY_ID?: string;
     AI_GATEWAY_NAME?: string;
     GEMINI_MODEL?: string;
     JD_STORE: DurableObjectNamespace<JobDescriptionStoreObject>;
@@ -169,10 +192,13 @@ export type CloudflareEnv = Env & {
 };
 
 export function createCloudflareServices(env: CloudflareEnv): AppServices {
+    const aiGatewayId =
+        env.AI_GATEWAY_ID ?? env.AI_GATEWAY_NAME ?? DEFAULT_AI_GATEWAY_NAME;
+
     return {
         ai: new WorkersAiExtractor(
             env.AI,
-            env.AI_GATEWAY_NAME ?? DEFAULT_AI_GATEWAY_NAME,
+            aiGatewayId,
             env.GEMINI_MODEL ?? DEFAULT_GEMINI_RESUME_MODEL,
         ),
         jdStore: new DurableObjectJdStore(env.JD_STORE),
@@ -221,7 +247,22 @@ class DurableObjectResumeStore implements ResumeStore {
 
     async createPendingUpload(
         input: ResumeExtractionInput,
+        context?: ObservabilityContext,
     ): Promise<ResumeUploadRecord> {
+        const startedAt = Date.now();
+        const fileNameHash = await sha256Hex(input.fileName);
+        const inputHash = await sha256Hex(input.bytes);
+
+        logInfo(
+            "resume.store.pending.create.start",
+            contextMetadata(context, {
+                file_name_sha256: fileNameHash,
+                input_bytes: input.bytes.byteLength,
+                input_sha256: inputHash,
+                upload_source: input.source,
+            }),
+        );
+
         const now = new Date().toISOString();
         const resumeId = createResumeId();
         const creating: ResumeMetadata = {
@@ -232,15 +273,30 @@ class DurableObjectResumeStore implements ResumeStore {
         };
         const registry = this.registryNamespace.getByName(RESUME_REGISTRY_NAME);
 
-        await registry.create(creating);
+        await registry.create(creating, context);
 
         const doc = this.documents.getByName(resumeId);
-        await doc.initUpload({
-            ...creating,
-            bytes: input.bytes,
-            fileName: input.fileName,
-            source: input.source,
-        });
+        await doc.initUpload(
+            {
+                ...creating,
+                bytes: input.bytes,
+                fileName: input.fileName,
+                source: input.source,
+            },
+            context,
+        );
+
+        logInfo(
+            "resume.store.pending.create.complete",
+            contextMetadata(context, {
+                duration_ms: durationMs(startedAt),
+                file_name_sha256: fileNameHash,
+                input_bytes: input.bytes.byteLength,
+                input_sha256: inputHash,
+                resume_id: resumeId,
+                upload_source: input.source,
+            }),
+        );
 
         return {
             ...creating,
@@ -253,12 +309,24 @@ class DurableObjectResumeStore implements ResumeStore {
     async completePendingAnalysis(
         resumeId: string,
         resume: ResumeAnalysis,
+        context?: ObservabilityContext,
     ): Promise<ResumeDocument> {
+        const startedAt = Date.now();
         const normalizedResume = parseResumeAnalysis(
             normalizeResumeAnalysis(resume),
         );
+        const resumeNameHash = await sha256Hex(normalizedResume.basic.name);
+
+        logInfo(
+            "resume.store.complete.start",
+            contextMetadata(context, {
+                resume_id: resumeId,
+                resume_name_sha256: resumeNameHash,
+            }),
+        );
+
         const doc = this.documents.getByName(resumeId);
-        const metadata = await doc.getMetadata();
+        const metadata = await doc.getMetadata(context);
 
         if (!metadata) {
             throw new Error(`Resume upload not found: ${resumeId}`);
@@ -276,23 +344,59 @@ class DurableObjectResumeStore implements ResumeStore {
 
         await this.registryNamespace
             .getByName(RESUME_REGISTRY_NAME)
-            .markReady(summarizeResume(normalizedResume, ready));
-        await doc.markReady(document);
+            .markReady(summarizeResume(normalizedResume, ready), context);
+        await doc.markReady(document, context);
+
+        logInfo(
+            "resume.store.complete.done",
+            contextMetadata(context, {
+                duration_ms: durationMs(startedAt),
+                education_count: normalizedResume.edu.length,
+                project_count: normalizedResume.project.length,
+                raw_text_chars: normalizedResume.rawText.length,
+                resume_id: resumeId,
+                resume_name_sha256: resumeNameHash,
+                skill_count: normalizedResume.skills.length,
+                work_count: normalizedResume.work.length,
+            }),
+        );
 
         return document;
     }
 
-    async failPendingAnalysis(resumeId: string): Promise<void> {
+    async failPendingAnalysis(
+        resumeId: string,
+        context?: ObservabilityContext,
+    ): Promise<void> {
+        const startedAt = Date.now();
         const failedAt = new Date().toISOString();
 
-        await this.documents.getByName(resumeId).markFailed(failedAt);
+        logInfo(
+            "resume.store.fail.start",
+            contextMetadata(context, {
+                resume_id: resumeId,
+            }),
+        );
+
+        await this.documents.getByName(resumeId).markFailed(failedAt, context);
         await this.registryNamespace
             .getByName(RESUME_REGISTRY_NAME)
-            .markFailed(resumeId, failedAt);
+            .markFailed(resumeId, failedAt, context);
+
+        logInfo(
+            "resume.store.fail.complete",
+            contextMetadata(context, {
+                duration_ms: durationMs(startedAt),
+                resume_id: resumeId,
+            }),
+        );
     }
 
-    async getById(resumeId: string): Promise<ResumeDocument | undefined> {
-        const document = await this.documents.getByName(resumeId).get();
+    async getById(
+        resumeId: string,
+        context?: ObservabilityContext,
+    ): Promise<ResumeDocument | undefined> {
+        const document = await this.documents.getByName(resumeId).get(context);
 
         return document?.status === "ready"
             ? {
@@ -306,32 +410,60 @@ class DurableObjectResumeStore implements ResumeStore {
 
     async getPendingUpload(
         resumeId: string,
+        context?: ObservabilityContext,
     ): Promise<PendingResumeUpload | undefined> {
-        return this.documents.getByName(resumeId).getPendingUpload();
+        return this.documents.getByName(resumeId).getPendingUpload(context);
     }
 
-    async getSummary(resumeId: string): Promise<ResumeSummary | undefined> {
+    async getSummary(
+        resumeId: string,
+        context?: ObservabilityContext,
+    ): Promise<ResumeSummary | undefined> {
         return this.registryNamespace
             .getByName(RESUME_REGISTRY_NAME)
-            .getSummary(resumeId);
+            .getSummary(resumeId, context);
     }
 
-    async listSummaries(): Promise<ResumeSummary[]> {
+    async listSummaries(
+        context?: ObservabilityContext,
+    ): Promise<ResumeSummary[]> {
         return this.registryNamespace
             .getByName(RESUME_REGISTRY_NAME)
-            .listSummaries();
+            .listSummaries(context);
     }
 
-    async count(): Promise<number> {
-        return this.registryNamespace.getByName(RESUME_REGISTRY_NAME).count();
+    async count(context?: ObservabilityContext): Promise<number> {
+        return this.registryNamespace
+            .getByName(RESUME_REGISTRY_NAME)
+            .count(context);
     }
 }
 
 class CloudflareResumeAnalysisQueue implements ResumeAnalysisQueue {
     constructor(private readonly queue: Queue<ResumeAnalysisJob>) {}
 
-    async enqueue(job: ResumeAnalysisJob): Promise<void> {
+    async enqueue(
+        job: ResumeAnalysisJob,
+        context?: ObservabilityContext,
+    ): Promise<void> {
+        const startedAt = Date.now();
+
+        logInfo(
+            "queue.resume_analysis.enqueue.start",
+            contextMetadata(context, {
+                resume_id: job.resumeId,
+            }),
+        );
+
         await this.queue.send(job);
+
+        logInfo(
+            "queue.resume_analysis.enqueue.complete",
+            contextMetadata(context, {
+                duration_ms: durationMs(startedAt),
+                resume_id: job.resumeId,
+            }),
+        );
     }
 }
 
@@ -340,26 +472,60 @@ class DurableObjectJdStore implements JobDescriptionStore {
         private readonly namespace: DurableObjectNamespace<JobDescriptionStoreObject>,
     ) {}
 
-    async save(jd: JobDescription): Promise<JobDescription> {
-        const result = await this.namespace.getByName(JD_STORE_NAME).create(jd);
+    async save(
+        jd: JobDescription,
+        context?: ObservabilityContext,
+    ): Promise<JobDescription> {
+        const startedAt = Date.now();
+        const idHash = await sha256Hex(jd.id);
+
+        logInfo(
+            "jd.store.save.start",
+            contextMetadata(context, {
+                jd_id_sha256: idHash,
+            }),
+        );
+
+        const result = await this.namespace
+            .getByName(JD_STORE_NAME)
+            .create(jd, context);
 
         if (!result.ok) {
+            logInfo(
+                "jd.store.save.duplicate",
+                contextMetadata(context, {
+                    jd_id_sha256: idHash,
+                }),
+            );
             throw new DuplicateJobDescriptionError(jd.id);
         }
+
+        logInfo(
+            "jd.store.save.complete",
+            contextMetadata(context, {
+                duration_ms: durationMs(startedAt),
+                jd_id_sha256: idHash,
+            }),
+        );
 
         return result.jd;
     }
 
-    async getById(id: string): Promise<JobDescription | undefined> {
-        return this.namespace.getByName(JD_STORE_NAME).getById(id);
+    async getById(
+        id: string,
+        context?: ObservabilityContext,
+    ): Promise<JobDescription | undefined> {
+        return this.namespace.getByName(JD_STORE_NAME).getById(id, context);
     }
 
-    async listSummaries(): Promise<JobDescriptionSummary[]> {
-        return this.namespace.getByName(JD_STORE_NAME).listSummaries();
+    async listSummaries(
+        context?: ObservabilityContext,
+    ): Promise<JobDescriptionSummary[]> {
+        return this.namespace.getByName(JD_STORE_NAME).listSummaries(context);
     }
 
-    async count(): Promise<number> {
-        return this.namespace.getByName(JD_STORE_NAME).count();
+    async count(context?: ObservabilityContext): Promise<number> {
+        return this.namespace.getByName(JD_STORE_NAME).count(context);
     }
 }
 
@@ -370,20 +536,47 @@ class WorkersAiExtractor implements AiExtractor {
         private readonly geminiResumeModel = DEFAULT_GEMINI_RESUME_MODEL,
     ) {}
 
-    async extractResume(input: ResumeExtractionInput): Promise<ResumeAnalysis> {
-        const markdown = await this.pdfToMarkdown(input);
+    async extractResume(
+        input: ResumeExtractionInput,
+        context?: ObservabilityContext,
+    ): Promise<ResumeAnalysis> {
+        const inputSha256 = await sha256Hex(input.bytes);
+        const markdown = await this.pdfToMarkdown(input, context, inputSha256);
         const response = await this.runGeminiResumePrompt(
             resumePrompt(input, markdown),
+            {
+                context,
+                inputBytes: input.bytes.byteLength,
+                inputKind: "resume_pdf",
+                inputSha256,
+                model: this.geminiResumeModel,
+                promptVersion: RESUME_PROMPT_VERSION,
+                schemaVersion: RESUME_SCHEMA_VERSION,
+                task: "resume_extract",
+                uploadSource: input.source,
+            },
         );
 
         return parseResumeAnalysis(normalizeResumeAnalysis(response));
     }
 
-    async analyzeJobDescription(rawText: string): Promise<JobDescription> {
+    async analyzeJobDescription(
+        rawText: string,
+        context?: ObservabilityContext,
+    ): Promise<JobDescription> {
         const response = await this.runJsonPrompt(
             JD_EXTRACTION_MODEL,
             "job-description",
             jdPrompt(rawText),
+            {
+                context,
+                inputChars: rawText.length,
+                inputKind: "job_description_text",
+                inputSha256: await sha256Hex(rawText),
+                model: JD_EXTRACTION_MODEL,
+                promptVersion: JD_PROMPT_VERSION,
+                task: "jd_extract",
+            },
         );
 
         return normalizeJd(response, rawText);
@@ -393,21 +586,23 @@ class WorkersAiExtractor implements AiExtractor {
         model: string,
         task: "job-description",
         content: string,
+        metadata: AiRequestMetadata,
     ): Promise<unknown> {
         const startedAt = Date.now();
         const maxTokens = JD_EXTRACTION_MAX_TOKENS;
-        let response: unknown;
-
-        console.info("resume-ai", {
-            event: "model:start",
-            maxTokens,
-            model,
-            promptChars: content.length,
+        const eventId = metadata.context?.requestId ?? crypto.randomUUID();
+        const logMetadata = aiLogMetadata(metadata, {
+            ai_gateway_enabled: Boolean(this.gatewayId),
+            gateway_event_id: eventId,
+            max_tokens: maxTokens,
+            prompt_chars: content.length,
             task,
         });
 
+        logInfo("ai.request.start", logMetadata);
+
         try {
-            response = await this.ai.run(
+            const response = await this.ai.run(
                 model,
                 {
                     chat_template_kwargs: {
@@ -435,63 +630,71 @@ class WorkersAiExtractor implements AiExtractor {
                 },
                 this.gatewayId
                     ? {
+                          extraHeaders: {
+                              "cf-aig-collect-log-payload": "false",
+                          },
                           gateway: {
                               cacheTtl: 3600,
+                              collectLog: true,
+                              eventId,
                               id: this.gatewayId,
+                              metadata: gatewayMetadata(metadata.context, {
+                                  inputKind: metadata.inputKind,
+                                  task: metadata.task,
+                              }),
                               skipCache: false,
                           },
                       }
                     : undefined,
             );
+
+            try {
+                const parsed = parseAiJson(response);
+
+                logInfo("ai.request.complete", {
+                    ...logMetadata,
+                    duration_ms: durationMs(startedAt),
+                });
+
+                return parsed;
+            } catch (error) {
+                const text = readAiText(response);
+
+                logError(
+                    "ai.request.parse_failed",
+                    {
+                        ...logMetadata,
+                        duration_ms: durationMs(startedAt),
+                        text_chars: text.length,
+                    },
+                    error,
+                );
+                throw new Error(
+                    `${model} returned invalid JSON: ${
+                        error instanceof Error ? error.message : String(error)
+                    }`,
+                    {
+                        cause: error,
+                    },
+                );
+            }
         } catch (error) {
-            console.error("resume-ai", {
-                durationMs: elapsed(startedAt),
-                error: errorMessage(error),
-                event: "model:failed",
-                model,
-                task,
-            });
-            throw new Error(
-                `${model} extraction failed: ${errorMessage(error)}`,
+            logError(
+                "ai.request.failed",
                 {
-                    cause: error,
+                    ...logMetadata,
+                    duration_ms: durationMs(startedAt),
                 },
+                error,
             );
-        }
-
-        console.info("resume-ai", {
-            durationMs: elapsed(startedAt),
-            event: "model:complete",
-            model,
-            response: describeAiResponse(response),
-            task,
-        });
-
-        try {
-            return parseAiJson(response);
-        } catch (error) {
-            const text = readAiText(response);
-
-            console.error("resume-ai", {
-                durationMs: elapsed(startedAt),
-                error: errorMessage(error),
-                event: "model:parse-failed",
-                model,
-                response: describeAiResponse(response),
-                task,
-                textChars: text.length,
-                textPreview: previewText(text),
-            });
-            throw new Error(
-                `${model} returned invalid JSON: ${errorMessage(error)}`,
-                {
-                    cause: error,
-                },
-            );
+            throw error;
         }
     }
 
-    private async runGeminiResumePrompt(content: string): Promise<unknown> {
+    private async runGeminiResumePrompt(
+        content: string,
+        metadata: AiRequestMetadata,
+    ): Promise<unknown> {
         if (!this.gatewayId) {
             throw new Error(
                 "AI Gateway name is required for resume extraction",
@@ -500,25 +703,25 @@ class WorkersAiExtractor implements AiExtractor {
 
         const startedAt = Date.now();
         const endpoint = `v1beta/models/${this.geminiResumeModel}:generateContent`;
-        let response: Response;
-
-        console.info("resume-ai", {
+        const eventId = metadata.context?.requestId ?? crypto.randomUUID();
+        const logMetadata = aiLogMetadata(metadata, {
+            ai_gateway_enabled: true,
             endpoint,
-            event: "gateway:model:start",
-            gatewayId: this.gatewayId,
-            maxOutputTokens: GEMINI_RESUME_MAX_OUTPUT_TOKENS,
-            model: this.geminiResumeModel,
-            promptChars: content.length,
+            gateway_event_id: eventId,
+            max_output_tokens: GEMINI_RESUME_MAX_OUTPUT_TOKENS,
+            prompt_chars: content.length,
             provider: GOOGLE_AI_STUDIO_PROVIDER,
-            task: "resume",
         });
 
+        logInfo("ai.request.start", logMetadata);
+
         try {
-            response = await this.ai.gateway(this.gatewayId).run(
+            const response = await this.ai.gateway(this.gatewayId).run(
                 {
                     endpoint,
                     headers: {
                         "Content-Type": "application/json",
+                        "cf-aig-collect-log-payload": "false",
                     },
                     provider: GOOGLE_AI_STUDIO_PROVIDER,
                     query: {
@@ -537,53 +740,30 @@ class WorkersAiExtractor implements AiExtractor {
                     },
                 },
                 {
+                    extraHeaders: {
+                        "cf-aig-collect-log-payload": "false",
+                    },
                     gateway: {
                         cacheTtl: 3600,
                         collectLog: true,
+                        eventId,
                         id: this.gatewayId,
+                        metadata: gatewayMetadata(metadata.context, {
+                            inputKind: metadata.inputKind,
+                            task: metadata.task,
+                        }),
                         skipCache: false,
                     },
                 },
             );
-        } catch (error) {
-            console.error("resume-ai", {
-                durationMs: elapsed(startedAt),
-                endpoint,
-                error: errorMessage(error),
-                event: "gateway:model:failed",
-                gatewayId: this.gatewayId,
-                model: this.geminiResumeModel,
-                provider: GOOGLE_AI_STUDIO_PROVIDER,
-                task: "resume",
-            });
-            throw new Error(
-                `${this.geminiResumeModel} extraction failed: ${errorMessage(error)}`,
-                { cause: error },
-            );
-        }
+            const responseText = await response.text();
 
-        const responseText = await response.text();
+            if (!response.ok) {
+                throw new Error(
+                    `${this.geminiResumeModel} extraction failed with HTTP ${response.status}`,
+                );
+            }
 
-        console.info("resume-ai", {
-            durationMs: elapsed(startedAt),
-            endpoint,
-            event: "gateway:model:response",
-            gatewayId: this.gatewayId,
-            model: this.geminiResumeModel,
-            provider: GOOGLE_AI_STUDIO_PROVIDER,
-            responseChars: responseText.length,
-            responsePreview: previewText(responseText),
-            status: response.status,
-            task: "resume",
-        });
-
-        if (!response.ok) {
-            throw new Error(
-                `${this.geminiResumeModel} extraction failed with HTTP ${response.status}: ${previewText(responseText)}`,
-            );
-        }
-
-        try {
             const payload = JSON.parse(responseText) as unknown;
             const text = readGeminiText(payload);
 
@@ -591,39 +771,48 @@ class WorkersAiExtractor implements AiExtractor {
                 throw new Error("Gemini response did not include text content");
             }
 
-            return parseAiJson(text);
-        } catch (error) {
-            console.error("resume-ai", {
-                durationMs: elapsed(startedAt),
-                endpoint,
-                error: errorMessage(error),
-                event: "gateway:model:parse-failed",
-                gatewayId: this.gatewayId,
-                model: this.geminiResumeModel,
-                provider: GOOGLE_AI_STUDIO_PROVIDER,
-                responseChars: responseText.length,
-                responsePreview: previewText(responseText),
-                task: "resume",
+            const parsed = parseAiJson(text);
+
+            logInfo("ai.request.complete", {
+                ...logMetadata,
+                duration_ms: durationMs(startedAt),
+                response_chars: responseText.length,
+                status_code: response.status,
             });
-            throw new Error(
-                `${this.geminiResumeModel} returned invalid JSON: ${errorMessage(error)}`,
-                { cause: error },
+
+            return parsed;
+        } catch (error) {
+            logError(
+                "ai.request.failed",
+                {
+                    ...logMetadata,
+                    duration_ms: durationMs(startedAt),
+                },
+                error,
             );
+            throw error;
         }
     }
 
-    private async pdfToMarkdown(input: ResumeExtractionInput): Promise<string> {
+    private async pdfToMarkdown(
+        input: ResumeExtractionInput,
+        context: ObservabilityContext | undefined,
+        inputSha256: string,
+    ): Promise<string> {
         const startedAt = Date.now();
-        let result: ConversionResponse;
-
-        console.info("resume-ai", {
-            bytes: input.bytes.byteLength,
-            event: "markdown:start",
-            fileName: input.fileName,
+        const fileNameHash = await sha256Hex(input.fileName);
+        const logMetadata = contextMetadata(context, {
+            file_name_sha256: fileNameHash,
+            input_bytes: input.bytes.byteLength,
+            input_sha256: inputSha256,
+            task: "resume_to_markdown",
+            upload_source: input.source,
         });
 
+        logInfo("ai.markdown.start", logMetadata);
+
         try {
-            result = await this.ai.toMarkdown(
+            const result = (await this.ai.toMarkdown(
                 {
                     blob: new Blob([bytesToArrayBuffer(input.bytes)], {
                         type: "application/pdf",
@@ -640,46 +829,63 @@ class WorkersAiExtractor implements AiExtractor {
                         },
                     },
                 },
-            );
+            )) as ConversionResponse;
+
+            if (result.format === "error") {
+                throw new Error(
+                    `PDF markdown conversion failed: ${result.error}`,
+                );
+            }
+
+            const markdown = compactResumeMarkdown(result.data);
+
+            logInfo("ai.markdown.complete", {
+                ...logMetadata,
+                compacted: markdown.length !== result.data.length,
+                duration_ms: durationMs(startedAt),
+                markdown_chars: markdown.length,
+                source_markdown_chars: result.data.length,
+                source_tokens: result.tokens,
+            });
+
+            return markdown;
         } catch (error) {
-            console.error("resume-ai", {
-                durationMs: elapsed(startedAt),
-                error: errorMessage(error),
-                event: "markdown:failed",
-                fileName: input.fileName,
-            });
-            throw new Error(
-                `PDF markdown conversion failed: ${errorMessage(error)}`,
-                { cause: error },
+            logError(
+                "ai.markdown.failed",
+                {
+                    ...logMetadata,
+                    duration_ms: durationMs(startedAt),
+                },
+                error,
             );
+            throw error;
         }
-
-        if (result.format === "error") {
-            console.error("resume-ai", {
-                durationMs: elapsed(startedAt),
-                error: result.error,
-                event: "markdown:error",
-                fileName: input.fileName,
-                format: result.format,
-            });
-            throw new Error(`PDF markdown conversion failed: ${result.error}`);
-        }
-
-        const markdown = compactResumeMarkdown(result.data);
-
-        console.info("resume-ai", {
-            compacted: markdown.length !== result.data.length,
-            durationMs: elapsed(startedAt),
-            event: "markdown:complete",
-            fileName: input.fileName,
-            markdownChars: markdown.length,
-            originalMarkdownChars: result.data.length,
-            tokens: result.tokens,
-        });
-
-        return markdown;
     }
 }
+
+type ConversionResponse =
+    | {
+          data: string;
+          format: "markdown";
+          tokens?: number;
+      }
+    | {
+          error: string;
+          format: "error";
+      };
+
+type AiRequestMetadata = {
+    context?: ObservabilityContext;
+    inputBytes?: number;
+    inputChars?: number;
+    inputKind: string;
+    inputSha256: string;
+    model: string;
+    promptVersion: string;
+    schemaVersion?: string;
+    task: string;
+    uploadSource?: string;
+};
 
 function resumePrompt(input: ResumeExtractionInput, markdown: string): string {
     return `Extract this PDF resume text into concise JSON with keys rawText, basic, edu, work, project, skills.
@@ -839,56 +1045,22 @@ function isAppJson(record: Record<string, unknown>): boolean {
     );
 }
 
-function describeAiResponse(response: unknown): Record<string, unknown> {
-    if (typeof response !== "object" || response === null) {
-        return {
-            type: typeof response,
-        };
-    }
-
-    const record = response as Record<string, unknown>;
-    const choices = Array.isArray(record.choices) ? record.choices : [];
-    const firstChoice = asRecord(choices[0]);
-    const firstMessage = asRecord(firstChoice?.message);
-    const firstMessageContent = firstMessage?.content;
-    const firstMessageReasoning = asRecord(firstMessage?.reasoning);
-    const result = asRecord(record.result);
-
-    return {
-        choiceCount: choices.length,
-        contentArrayLength: Array.isArray(firstMessageContent)
-            ? firstMessageContent.length
-            : undefined,
-        contentChars: stringLength(firstMessageContent),
-        contentType:
-            firstMessageContent === null || firstMessageContent === undefined
-                ? firstMessageContent
-                : Array.isArray(firstMessageContent)
-                  ? "array"
-                  : typeof firstMessageContent,
-        finishReason: firstChoice?.finish_reason,
-        keys: Object.keys(record).slice(0, 12),
-        messageKeys: firstMessage
-            ? Object.keys(firstMessage).slice(0, 12)
-            : undefined,
-        object: record.object,
-        reasoningChars: stringLength(firstMessage?.reasoning_content),
-        reasoningKeys: firstMessageReasoning
-            ? Object.keys(firstMessageReasoning).slice(0, 12)
-            : undefined,
-        reasoningType:
-            firstMessage?.reasoning === undefined
-                ? undefined
-                : typeof firstMessage.reasoning,
-        responseChars: stringLength(record.response),
-        resultKeys: result ? Object.keys(result).slice(0, 12) : undefined,
-        resultType:
-            record.result === undefined ? undefined : typeof record.result,
-        stopReason: firstChoice?.stop_reason,
-        textChars: stringLength(firstChoice?.text),
-        type: "object",
-        usage: record.usage,
-    };
+function aiLogMetadata(
+    metadata: AiRequestMetadata,
+    extra: LogMetadata = {},
+): LogMetadata {
+    return contextMetadata(metadata.context, {
+        ...extra,
+        input_bytes: metadata.inputBytes,
+        input_chars: metadata.inputChars,
+        input_kind: metadata.inputKind,
+        input_sha256: metadata.inputSha256,
+        model: metadata.model,
+        prompt_version: metadata.promptVersion,
+        schema_version: metadata.schemaVersion,
+        task: metadata.task,
+        upload_source: metadata.uploadSource,
+    });
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -925,14 +1097,6 @@ function readTextContent(value: unknown): string | undefined {
         .filter(Boolean);
 
     return parts.length > 0 ? parts.join("") : undefined;
-}
-
-function stringLength(value: unknown): number | undefined {
-    return typeof value === "string" ? value.length : undefined;
-}
-
-function previewText(text: string): string {
-    return text.replace(/\s+/g, " ").slice(0, 320);
 }
 
 function normalizeJd(data: unknown, rawText: string): JobDescription {
@@ -1008,12 +1172,4 @@ function hardLimitMarkdown(markdown: string): string {
     }
 
     return `${markdown.slice(0, MAX_RESUME_MARKDOWN_CHARS)}\n\n[truncated]`;
-}
-
-function elapsed(startedAt: number): number {
-    return Date.now() - startedAt;
-}
-
-function errorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
 }
