@@ -27,6 +27,7 @@ export type ResumeAnalysisJob = {
 };
 
 export interface ResumeStore {
+    archive(resumeId: string): Promise<ResumeSummary | undefined>;
     completePendingAnalysis(
         resumeId: string,
         resume: ResumeAnalysis,

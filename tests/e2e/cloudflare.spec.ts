@@ -12,22 +12,46 @@ test.describe("deployed Cloudflare Worker app", () => {
     test("uploads a PDF through the real app and opens the stored resume detail page", async ({
         page,
     }) => {
-        await page.goto(baseURL!);
-        await expect(
-            page.getByRole("navigation", { name: /primary/i }),
-        ).toBeVisible();
+        let resumeId: string | undefined;
 
-        await page.getByLabel(/choose resume pdf/i).setInputFiles({
-            name: "ava-chen.pdf",
-            mimeType: "application/pdf",
-            buffer: pdfWithPages(1, "Ava Chen"),
-        });
+        try {
+            await page.goto(baseURL!);
+            await expect(
+                page.getByRole("navigation", { name: /primary/i }),
+            ).toBeVisible();
 
-        await expect(page.getByText(/raw resume/i)).toBeVisible({
-            timeout: 120_000,
-        });
-        await expect(page).toHaveURL(/\/resumes\/.+/);
-        await page.getByRole("link", { name: /uploaded resumes/i }).click();
-        await expect(page.getByRole("table")).toContainText(/Ava/i);
+            await page.getByLabel(/choose resume pdf/i).setInputFiles({
+                name: "ava-chen.pdf",
+                mimeType: "application/pdf",
+                buffer: pdfWithPages(1, "Ava Chen"),
+            });
+
+            await expect(page.getByText(/raw resume/i)).toBeVisible({
+                timeout: 120_000,
+            });
+            await expect(page).toHaveURL(/\/resumes\/.+/);
+            resumeId = resumeIdFromUrl(page.url());
+            await page.getByRole("link", { name: /uploaded resumes/i }).click();
+            await expect(page.getByRole("table")).toContainText(/Ava/i);
+        } finally {
+            if (resumeId) {
+                await page.request.delete(archiveUrl(resumeId)).catch(() => {
+                    // Best-effort cleanup for deployed e2e runs.
+                });
+            }
+        }
     });
 });
+
+function resumeIdFromUrl(value: string): string | undefined {
+    const match = new URL(value).pathname.match(/^\/resumes\/([^/]+)$/);
+
+    return match?.[1] ? decodeURIComponent(match[1]) : undefined;
+}
+
+function archiveUrl(resumeId: string): string {
+    return new URL(
+        `/api/resumes/${encodeURIComponent(resumeId)}`,
+        baseURL!,
+    ).toString();
+}

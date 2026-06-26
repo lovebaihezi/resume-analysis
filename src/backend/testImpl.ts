@@ -82,6 +82,41 @@ class MemoryResumeStore implements ResumeStore {
     readonly records = new Map<string, ResumeDocument>();
     readonly summaries = new Map<string, ResumeSummary>();
 
+    async archive(resumeId: string): Promise<ResumeSummary | undefined> {
+        const existing = this.summaries.get(resumeId);
+
+        if (!existing) {
+            return undefined;
+        }
+
+        if (existing.status === "archived") {
+            return existing;
+        }
+
+        const archivedAt = new Date().toISOString();
+        const archivedSummary: ResumeSummary = {
+            ...existing,
+            archivedAt,
+            status: "archived",
+            updatedAt: archivedAt,
+        };
+        const document = this.records.get(resumeId);
+
+        this.pending.delete(resumeId);
+        this.summaries.set(resumeId, archivedSummary);
+
+        if (document) {
+            this.records.set(resumeId, {
+                ...document,
+                archivedAt,
+                status: "archived",
+                updatedAt: archivedAt,
+            });
+        }
+
+        return archivedSummary;
+    }
+
     async createPendingUpload(
         input: ResumeExtractionInput,
     ): Promise<ResumeUploadRecord> {
@@ -157,7 +192,9 @@ class MemoryResumeStore implements ResumeStore {
     }
 
     async getById(resumeId: string): Promise<ResumeDocument | undefined> {
-        return this.records.get(resumeId);
+        const document = this.records.get(resumeId);
+
+        return document?.status === "ready" ? document : undefined;
     }
 
     async getPendingUpload(

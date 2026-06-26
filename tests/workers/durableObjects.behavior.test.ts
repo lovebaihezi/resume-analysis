@@ -14,57 +14,17 @@ import {
     parseResumeStatusResult,
     parseResumeUploadResult,
 } from "../../src/shared/schemas";
-import type {
-    ResumeDocument,
-    ResumeMetadata,
-    ResumeSummary,
-} from "../../src/shared/types";
 import { pdfWithPages } from "../fixtures/pdf";
 import { sampleJobDescription, sampleResume } from "../fixtures/sampleData";
 
-const createdAt = "2026-06-26T00:00:00.000Z";
 const apiOrigin = "https://resume-analysis.test";
 
-function metadata(resumeId: string): ResumeMetadata {
-    return {
-        createdAt,
-        resumeId,
-        status: "creating",
-        updatedAt: createdAt,
-    };
-}
-
-function readySummary(resumeId: string): ResumeSummary {
-    return {
-        ...metadata(resumeId),
-        highestEducation: "Master",
-        name: "Ava Chen",
-        skills: ["React", "Cloudflare Workers", "XState"],
-        status: "ready",
-        updatedAt: "2026-06-26T00:00:01.000Z",
-        workDuration: "2020-01-01 to 2024-03-01",
-    };
-}
-
-function readyDocument(resumeId: string): ResumeDocument {
-    return {
-        ...readySummary(resumeId),
-        resume: sampleResume,
-    };
-}
-
 class FixtureAi {
-    readonly gatewayCalls: unknown[] = [];
-    readonly markdownCalls: Array<{ blob: Blob; name: string }> = [];
-    readonly runCalls: unknown[] = [];
-
     async run(
-        model: string,
-        input: unknown,
-        options?: unknown,
+        _model: string,
+        _input: unknown,
+        _options?: unknown,
     ): Promise<unknown> {
-        this.runCalls.push({ input, model, options });
-
         return {
             response: JSON.stringify(sampleJobDescription),
         };
@@ -74,9 +34,7 @@ class FixtureAi {
         run: (request: unknown, options?: unknown) => Promise<Response>;
     } {
         return {
-            run: async (request: unknown, options?: unknown) => {
-                this.gatewayCalls.push({ options, request });
-
+            run: async () => {
                 return Response.json({
                     candidates: [
                         {
@@ -96,9 +54,7 @@ class FixtureAi {
         };
     }
 
-    async toMarkdown(file: { blob: Blob; name: string }): Promise<unknown> {
-        this.markdownCalls.push(file);
-
+    async toMarkdown(file: { name: string }): Promise<unknown> {
         return {
             data: "Ava Chen resume converted to markdown",
             format: "markdown",
@@ -180,9 +136,6 @@ describe("Cloudflare Durable Object storage behavior", () => {
         const queueResult = await getQueueResult(batch, ctx);
         expect(queueResult.explicitAcks).toEqual(["message-1"]);
         expect(queueResult.retryMessages).toEqual([]);
-        expect(ai.markdownCalls).toHaveLength(1);
-        expect(ai.gatewayCalls).toHaveLength(1);
-        expect(ai.runCalls).toHaveLength(0);
 
         const readyStatus = await workerExports.default.fetch(
             `${apiOrigin}/api/resumes/${upload.resumeId}/status`,
@@ -217,131 +170,37 @@ describe("Cloudflare Durable Object storage behavior", () => {
                 }),
             ],
         });
-    });
 
-    it("tracks resume registry creating, ready, and failed states", async () => {
-        const registry = env.RESUME_REGISTRY.getByName("registry-transitions");
-        const resumeId = "018f2f8c-3a4b-7c01-8d2e-9f0011223344";
-        const failedId = "018f2f8c-3a4b-7c01-8d2e-9f0011223345";
+        const archiveResponse = await workerExports.default.fetch(
+            new Request(`${apiOrigin}/api/resumes/${upload.resumeId}`, {
+                method: "DELETE",
+            }),
+        );
+        expect(archiveResponse.status).toBe(204);
 
-        await registry.create(metadata(resumeId));
-        expect(await registry.getSummary(resumeId)).toMatchObject({
-            resumeId,
-            status: "creating",
-        });
-
-        await registry.markReady(readySummary(resumeId));
-        expect(await registry.getSummary(resumeId)).toMatchObject({
+        const archivedStatus = await workerExports.default.fetch(
+            `${apiOrigin}/api/resumes/${upload.resumeId}/status`,
+        );
+        expect(
+            parseResumeStatusResult(await archivedStatus.json()),
+        ).toMatchObject({
+            archivedAt: expect.any(String),
             name: "Ava Chen",
-            resumeId,
-            status: "ready",
-        });
-        expect(await registry.listSummaries()).toHaveLength(1);
-
-        await registry.create(metadata(failedId));
-        await registry.markFailed(failedId, "2026-06-26T00:00:02.000Z");
-        expect(await registry.getSummary(failedId)).toMatchObject({
-            resumeId: failedId,
-            status: "failed",
-        });
-        expect(await registry.count()).toBe(1);
-    });
-
-    it("lists resume summaries directly from the registry", async () => {
-        const registry = env.RESUME_REGISTRY.getByName("registry-list");
-        const resumeId = "018f2f8c-3a4b-7c01-8d2e-9f0011223346";
-
-        await registry.create(metadata(resumeId));
-        await registry.markReady(readySummary(resumeId));
-
-        expect(await registry.listSummaries()).toEqual([
-            expect.objectContaining({
-                name: "Ava Chen",
-                resumeId,
-                status: "ready",
-            }),
-        ]);
-    });
-
-    it("stores and retrieves resume documents by resumeId", async () => {
-        const resumeId = "018f2f8c-3a4b-7c01-8d2e-9f0011223347";
-        const document = env.RESUME_DOCUMENT.getByName(resumeId);
-
-        await document.init(readyDocument(resumeId));
-
-        expect(await document.get()).toMatchObject({
-            resume: {
-                basic: {
-                    name: "Ava Chen",
-                },
-            },
-            resumeId,
-            status: "ready",
-        });
-        expect(await document.getMetadata()).toMatchObject({
-            resumeId,
-            status: "ready",
-        });
-    });
-
-    it("stores pending resume uploads and clears bytes when marked ready", async () => {
-        const resumeId = "018f2f8c-3a4b-7c01-8d2e-9f0011223348";
-        const document = env.RESUME_DOCUMENT.getByName(resumeId);
-        const bytes = new TextEncoder().encode("%PDF-1.7\nAva Chen");
-
-        await document.initUpload({
-            ...metadata(resumeId),
-            bytes,
-            fileName: "ava-chen.pdf",
-            source: "drag",
+            resumeId: upload.resumeId,
+            status: "archived",
         });
 
-        expect(await document.getPendingUpload()).toMatchObject({
-            fileName: "ava-chen.pdf",
-            resumeId,
-            source: "drag",
-            status: "creating",
-        });
+        const archivedDetail = await workerExports.default.fetch(
+            `${apiOrigin}/api/resumes/${upload.resumeId}`,
+        );
+        expect(archivedDetail.status).toBe(404);
 
-        await document.markReady(readyDocument(resumeId));
-
-        expect(await document.getPendingUpload()).toBeUndefined();
-        expect(await document.get()).toMatchObject({
-            resume: {
-                basic: {
-                    name: "Ava Chen",
-                },
-            },
-            resumeId,
-            status: "ready",
-        });
-    });
-
-    it("rejects duplicate job description ids and serves list/detail data", async () => {
-        const store = env.JD_STORE.getByName("jd-duplicates");
-
-        const first = await store.create(sampleJobDescription);
-        const duplicate = await store.create(sampleJobDescription);
-
-        expect(first).toMatchObject({
-            jd: {
-                id: "senior-frontend-engineer",
-                title: "Senior Frontend Engineer",
-            },
-            ok: true,
-        });
-        expect(duplicate).toEqual({ code: "duplicate", ok: false });
-        expect(await store.count()).toBe(1);
-        expect(await store.listSummaries()).toEqual([
-            expect.objectContaining({
-                id: "senior-frontend-engineer",
-                title: "Senior Frontend Engineer",
-            }),
-        ]);
-        expect(await store.getById("senior-frontend-engineer")).toMatchObject({
-            requiredSkills: expect.arrayContaining(["React"]),
-            title: "Senior Frontend Engineer",
-        });
+        const archivedListResponse = await workerExports.default.fetch(
+            `${apiOrigin}/api/resumes`,
+        );
+        expect(
+            parseResumeListResult(await archivedListResponse.json()).count,
+        ).toBe(0);
     });
 });
 

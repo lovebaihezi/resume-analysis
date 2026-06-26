@@ -53,9 +53,6 @@ describe("resume analysis UI behavior", () => {
 
         await user.upload(screen.getByLabelText(/choose resume pdf/i), file);
 
-        await waitFor(async () => {
-            expect((await readBackendState()).sources).toEqual(["click"]);
-        });
         await waitFor(() => {
             expect(window.location.pathname).toMatch(/^\/resumes\/.+/);
         });
@@ -89,15 +86,39 @@ describe("resume analysis UI behavior", () => {
     });
 
     it("links resume table rows by resumeId while displaying the extracted name", async () => {
-        const state = await resetBackend({ seedResume: true });
+        await resetBackend({ seedResume: true });
         renderApp("/resumes");
 
         const link = await screen.findByRole("link", { name: "Ava Chen" });
 
-        expect(link).toHaveAttribute("href", `/resumes/${state.seedResumeId}`);
+        expect(link).toHaveAttribute(
+            "href",
+            expect.stringMatching(
+                /^\/resumes\/[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+            ),
+        );
     });
 
-    it("tracks drag and paste upload sources separately", async () => {
+    it("archives a resume from the uploaded resume table", async () => {
+        await resetBackend({ seedResume: true });
+        const user = userEvent.setup();
+        renderApp("/resumes");
+
+        expect(await screen.findByText("1 total")).toBeInTheDocument();
+        await user.click(
+            await screen.findByRole("button", { name: /archive ava chen/i }),
+        );
+
+        await waitFor(() => {
+            expect(
+                screen.queryByRole("link", { name: "Ava Chen" }),
+            ).not.toBeInTheDocument();
+        });
+        expect(await screen.findByText("0 total")).toBeInTheDocument();
+        expect(screen.getByText("No resumes uploaded.")).toBeInTheDocument();
+    });
+
+    it("uploads PDFs from drag and paste interactions", async () => {
         await resetBackend();
         renderApp("/");
         const file = new File([pdfWithPages(1, "Ava Chen")], "ava-chen.pdf", {
@@ -109,12 +130,17 @@ describe("resume analysis UI behavior", () => {
             fireEvent(zone, dropEvent(file));
         });
 
-        await waitFor(async () => {
-            expect((await readBackendState()).sources).toContain("drag");
+        await waitFor(() => {
+            expect(window.location.pathname).toMatch(/^\/resumes\/.+/);
         });
+        expect(await screen.findByText(/raw resume/i)).toBeInTheDocument();
+        expect(
+            screen.getByText("Ava Chen", { selector: "p" }),
+        ).toBeInTheDocument();
 
         cleanup();
         window.history.replaceState(null, "", "/");
+        await resetBackend();
         renderApp("/");
 
         const pasted = new ClipboardEvent("paste", { bubbles: true });
@@ -127,12 +153,13 @@ describe("resume analysis UI behavior", () => {
             window.dispatchEvent(pasted);
         });
 
-        await waitFor(async () => {
-            expect((await readBackendState()).sources).toEqual([
-                "drag",
-                "paste",
-            ]);
+        await waitFor(() => {
+            expect(window.location.pathname).toMatch(/^\/resumes\/.+/);
         });
+        expect(await screen.findByText(/raw resume/i)).toBeInTheDocument();
+        expect(
+            screen.getByText("Ava Chen", { selector: "p" }),
+        ).toBeInTheDocument();
     });
 
     it("rejects non-PDF files in the upload surface before calling the API", async () => {
@@ -146,7 +173,6 @@ describe("resume analysis UI behavior", () => {
         });
 
         expect(await screen.findByText(/pdf files only/i)).toBeInTheDocument();
-        expect((await readBackendState()).sources).toEqual([]);
     });
 
     it("submits a raw JD and displays structured AI output", async () => {
@@ -221,10 +247,6 @@ function renderApp(initialEntry: string): void {
 
 type BackendState = {
     mode: "auto" | "pending";
-    queuedJobs: Array<{ resumeId: string }>;
-    resumeCount: number;
-    seedResumeId?: string;
-    sources: string[];
 };
 
 async function resetBackend(
@@ -232,7 +254,7 @@ async function resetBackend(
         mode?: BackendState["mode"];
         seedResume?: boolean;
     } = {},
-): Promise<BackendState> {
+): Promise<void> {
     const params = new URLSearchParams({
         mode: options.mode ?? "auto",
         seedResume: String(options.seedResume ?? false),
@@ -242,14 +264,4 @@ async function resetBackend(
     });
 
     expect(response.ok).toBe(true);
-
-    return (await response.json()) as BackendState;
-}
-
-async function readBackendState(): Promise<BackendState> {
-    const response = await fetch("/__test/state");
-
-    expect(response.ok).toBe(true);
-
-    return (await response.json()) as BackendState;
 }

@@ -32,6 +32,7 @@ export interface ApiClient {
         source: UploadSource,
         onProgress: (progress: UploadProgress) => void,
     ): Promise<ResumeUploadResult>;
+    archiveResume(resumeId: string): Promise<void>;
     listResumes(): Promise<ResumeListResult>;
     getResumeInfo(resumeId: string): Promise<ResumeInfoResult>;
     getResumeStatus(resumeId: string): Promise<ResumeStatusResult>;
@@ -78,6 +79,9 @@ export const browserApiClient: ApiClient = {
     },
     async listResumes() {
         return parseResumeListResult(await getJson("/api/resumes"));
+    },
+    async archiveResume(resumeId) {
+        await deleteResource(`/api/resumes/${encodeURIComponent(resumeId)}`);
     },
     async getResumeInfo(resumeId) {
         return parseResumeInfoResult(
@@ -134,6 +138,20 @@ async function postJson(url: string, body: unknown): Promise<unknown> {
     }
 
     return payload;
+}
+
+async function deleteResource(url: string): Promise<void> {
+    const response = await fetch(url, {
+        method: "DELETE",
+    });
+
+    if (response.ok) {
+        return;
+    }
+
+    const payload = await response.json().catch(() => ({}));
+
+    throw new Error(readError(payload) ?? "Request failed");
 }
 
 function parseJson(text: string): unknown {

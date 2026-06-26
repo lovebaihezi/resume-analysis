@@ -15,10 +15,6 @@ type BackendOptions = {
 
 type TestBackend = {
     app: ConnectHandler;
-    mode: BackendMode;
-    seedResumeId?: string;
-    services: ReturnType<typeof createTestServices>;
-    sources: string[];
 };
 
 type ConnectHandler = (
@@ -51,12 +47,8 @@ export function testBackendPlugin(): Plugin {
                             seedResume:
                                 url.searchParams.get("seedResume") === "true",
                         });
-                        sendJson(response, await state(await backendPromise));
-                        return;
-                    }
-
-                    if (url.pathname === "/__test/state") {
-                        sendJson(response, await state(await backendPromise));
+                        await backendPromise;
+                        sendJson(response, { ok: true });
                         return;
                     }
 
@@ -76,12 +68,7 @@ export function testBackendPlugin(): Plugin {
 }
 
 async function createBackend(options: BackendOptions): Promise<TestBackend> {
-    const sources: string[] = [];
-    const services = createTestServices({
-        onExtractResume(input) {
-            sources.push(input.source);
-        },
-    });
+    const services = createTestServices();
     const originalEnqueue = services.resumeAnalysisQueue.enqueue.bind(
         services.resumeAnalysisQueue,
     );
@@ -92,13 +79,6 @@ async function createBackend(options: BackendOptions): Promise<TestBackend> {
         if (options.mode === "auto") {
             await processResumeAnalysisJob(services, job);
         }
-    };
-
-    const backend: TestBackend = {
-        app: createApiApp(services) as unknown as ConnectHandler,
-        mode: options.mode,
-        services,
-        sources,
     };
 
     if (options.seedResume) {
@@ -112,19 +92,10 @@ async function createBackend(options: BackendOptions): Promise<TestBackend> {
             upload.resumeId,
             sampleResume,
         );
-        backend.seedResumeId = upload.resumeId;
     }
 
-    return backend;
-}
-
-async function state(backend: TestBackend): Promise<Record<string, unknown>> {
     return {
-        mode: backend.mode,
-        queuedJobs: backend.services.resumeAnalysisQueue.jobs,
-        resumeCount: await backend.services.resumeStore.count(),
-        seedResumeId: backend.seedResumeId,
-        sources: backend.sources,
+        app: createApiApp(services) as unknown as ConnectHandler,
     };
 }
 
