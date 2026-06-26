@@ -1,12 +1,14 @@
 name: Deploy Worker
 
 on:
+    pull_request:
+        branches: [main]
     push:
         branches: [main]
     workflow_dispatch:
 
 jobs:
-    test-and-deploy:
+    validate-and-deploy:
         runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@v5
@@ -26,7 +28,16 @@ jobs:
             - run: pnpm run typecheck
             - run: pnpm run test
             - run: pnpm run build
+
+            - run: pnpm exec wrangler deploy --dry-run
+
             - run: pnpm exec wrangler deploy
+              if: github.event_name != 'pull_request'
               env:
                   CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
                   CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+            - run: pnpm run test:e2e
+              if: github.event_name != 'pull_request'
+              env:
+                  E2E_BASE_URL: https://rs.lqxclqxc.biz
