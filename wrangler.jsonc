@@ -12,6 +12,12 @@
     },
     "upload_source_maps": true,
     "compatibility_flags": ["nodejs_compat"],
+    "routes": [
+        {
+            "pattern": "rs.lqxclqxc.biz",
+            "custom_domain": true,
+        },
+    ],
     "assets": {
         "directory": "./dist",
         "not_found_handling": "single-page-application",
@@ -53,9 +59,6 @@
     ],
     "ai": {
         "binding": "AI",
-    },
-    "vars": {
-        "AI_GATEWAY_NAME": "resume-analyze",
     },
     /**
      * Smart Placement
