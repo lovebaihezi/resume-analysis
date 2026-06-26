@@ -192,6 +192,33 @@ class DurableObjectResumeStore implements ResumeStore {
         private readonly registryNamespace: DurableObjectNamespace<ResumeRegistryObject>,
     ) {}
 
+    async archive(resumeId: string): Promise<ResumeSummary | undefined> {
+        const registry = this.registryNamespace.getByName(RESUME_REGISTRY_NAME);
+        const existing = await registry.getSummary(resumeId);
+
+        if (!existing) {
+            return undefined;
+        }
+
+        if (existing.status === "archived") {
+            return existing;
+        }
+
+        const archivedAt = new Date().toISOString();
+
+        await registry.archive(resumeId, archivedAt);
+        await this.documents.getByName(resumeId).archive(archivedAt);
+
+        return (
+            (await registry.getSummary(resumeId)) ?? {
+                ...existing,
+                archivedAt,
+                status: "archived",
+                updatedAt: archivedAt,
+            }
+        );
+    }
+
     async createPendingUpload(
         input: ResumeExtractionInput,
     ): Promise<ResumeUploadRecord> {

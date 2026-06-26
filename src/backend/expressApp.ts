@@ -97,6 +97,21 @@ export function createApiApp(services: AppServices): express.Express {
         }),
     );
 
+    app.delete(
+        "/api/resumes/:resumeId",
+        asyncHandler(async (req, res) => {
+            const resumeId = String(req.params.resumeId ?? "");
+            const archived = await services.resumeStore.archive(resumeId);
+
+            if (!archived) {
+                res.status(404).json({ error: "Resume not found" });
+                return;
+            }
+
+            res.status(204).send();
+        }),
+    );
+
     app.get(
         "/api/resumes/:resumeId/status",
         asyncHandler(async (req, res) => {
