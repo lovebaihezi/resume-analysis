@@ -7,6 +7,9 @@ settings:
 importers:
     .:
         dependencies:
+            "@phosphor-icons/react":
+                specifier: ^2.1.10
+                version: 2.1.10(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
             "@stylexjs/stylex":
                 specifier: ^0.19.0
                 version: 0.19.0
@@ -28,6 +31,9 @@ importers:
             react-router-dom:
                 specifier: ^7.18.0
                 version: 7.18.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+            simple-icons:
+                specifier: ^16.24.0
+                version: 16.24.0
             swr:
                 specifier: ^2.4.2
                 version: 2.4.2(react@19.2.7)
@@ -1268,6 +1274,16 @@ packages:
             {
                 integrity: sha512-XO7cAxhnTZl0Yggq6jOgjiOHhbgcO4NqFqwSmQpjK3b6TEE6Uj/jfSk6wzYyemh3+I0sHirKSetjQwn5cZktFw==,
             }
+
+    "@phosphor-icons/react@2.1.10":
+        resolution:
+            {
+                integrity: sha512-vt8Tvq8GLjheAZZYa+YG/pW7HDbov8El/MANW8pOAz4eGxrwhnbfrQZq0Cp4q8zBEu8NIhHdnr+r8thnfRSNYA==,
+            }
+        engines: { node: ">=10" }
+        peerDependencies:
+            react: ">= 16.8"
+            react-dom: ">= 16.8"
 
     "@playwright/test@1.61.1":
         resolution:
@@ -3427,6 +3443,13 @@ packages:
                 integrity: sha512-wnD2ZE+l+SPC/uoS0vXeE9L1+0wuaMqKlfz9AMUo38JsyLSBWSFcHR1Rri62LZc12vLr1gb3jl7iwQhgwpAbGQ==,
             }
 
+    simple-icons@16.24.0:
+        resolution:
+            {
+                integrity: sha512-lAPW1rqgwPQ4tdIY15TtcKSgSelvJexz8q/B+a7Igg1dJoXR0LPjScLkLMI8UbLSkS41/fLVZWIhsH7HPUwAgQ==,
+            }
+        engines: { node: ">=0.12.18" }
+
     sirv@3.0.2:
         resolution:
             {
@@ -4476,6 +4499,11 @@ snapshots:
     "@paralleldrive/cuid2@2.3.1":
         dependencies:
             "@noble/hashes": 1.8.0
+
+    "@phosphor-icons/react@2.1.10(react-dom@19.2.7(react@19.2.7))(react@19.2.7)":
+        dependencies:
+            react: 19.2.7
+            react-dom: 19.2.7(react@19.2.7)
 
     "@playwright/test@1.61.1":
         dependencies:
@@ -5778,6 +5806,8 @@ snapshots:
     siginfo@2.0.0: {}
 
     signal-exit@3.0.7: {}
+
+    simple-icons@16.24.0: {}
 
     sirv@3.0.2:
         dependencies:

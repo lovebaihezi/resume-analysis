@@ -21,6 +21,7 @@
         "cf-typegen": "wrangler types"
     },
     "dependencies": {
+        "@phosphor-icons/react": "^2.1.10",
         "@stylexjs/stylex": "^0.19.0",
         "@xstate/react": "^6.1.0",
         "arktype": "^2.2.1",
@@ -28,6 +29,7 @@
         "react": "^19.2.7",
         "react-dom": "^19.2.7",
         "react-router-dom": "^7.18.0",
+        "simple-icons": "^16.24.0",
         "swr": "^2.4.2",
         "xstate": "^5.32.2"
     },
