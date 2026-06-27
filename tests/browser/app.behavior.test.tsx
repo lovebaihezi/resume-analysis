@@ -287,8 +287,9 @@ describe("resume analysis UI behavior", () => {
         const user = userEvent.setup();
         renderApp("/jd");
 
+        await user.click(screen.getByRole("button", { name: /add jd/i }));
         await user.type(
-            screen.getByLabelText(/job description/i),
+            screen.getByLabelText(/paste jd text/i),
             "Senior frontend engineer with React and Cloudflare Workers experience.",
         );
         await user.click(screen.getByRole("button", { name: /analyze jd/i }));
@@ -309,16 +310,22 @@ describe("resume analysis UI behavior", () => {
         const user = userEvent.setup();
         renderApp("/jd");
 
+        await user.click(screen.getByRole("button", { name: /add jd/i }));
         await user.type(
-            screen.getByLabelText(/job description/i),
+            screen.getByLabelText(/paste jd text/i),
             "Senior frontend engineer with React, XState, Cloudflare Workers, and accessibility ownership.",
         );
+        await user.click(screen.getByRole("button", { name: /analyze jd/i }));
         expect(
-            screen.queryByRole("button", { name: /match resume/i }),
-        ).not.toBeInTheDocument();
+            await screen.findByRole("heading", {
+                name: /senior frontend engineer/i,
+            }),
+        ).toBeInTheDocument();
+        expect(
+            screen.getByRole("button", { name: /match resume/i }),
+        ).toBeDisabled();
 
-        const resumeSelector =
-            await screen.findByLabelText(/uploaded document/i);
+        const resumeSelector = await screen.findByLabelText(/^resume$/i);
         const resumeOption = await screen.findByRole("option", {
             name: "Asuka",
         });
@@ -326,7 +333,7 @@ describe("resume analysis UI behavior", () => {
         await user.selectOptions(resumeSelector, resumeOption);
         expect(
             screen.getByRole("button", { name: /match resume/i }),
-        ).toBeInTheDocument();
+        ).toBeEnabled();
 
         vi.useFakeTimers();
         fireEvent.click(screen.getByRole("button", { name: /match resume/i }));
