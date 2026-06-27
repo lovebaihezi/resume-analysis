@@ -6,8 +6,12 @@ import {
 } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import worker from "../../src/index";
-import type { CloudflareEnv } from "../../src/backend/cf/services";
+import {
+    createCloudflareServices,
+    type CloudflareEnv,
+} from "../../src/backend/cf/services";
 import type { ResumeAnalysisJob } from "../../src/backend/ports";
+import type { ResumeDocument } from "../../src/shared/types";
 import {
     parseResumeInfoResult,
     parseResumeListResult,
@@ -19,8 +23,53 @@ import { pdfWithPages } from "../fixtures/pdf";
 import { sampleJobDescription, sampleResume } from "../fixtures/sampleData";
 
 const apiOrigin = "https://resume-analysis.test";
+const sampleMatchPayload = {
+    dimensions: [
+        {
+            dimension: "edu",
+            label: "Edu",
+            percentage: 80,
+            rationale: "Master degree aligns with the role baseline.",
+            score: 4,
+        },
+        {
+            dimension: "project",
+            label: "Project",
+            percentage: 80,
+            rationale: "Resume analyzer project is directly relevant.",
+            score: 4,
+        },
+        {
+            dimension: "work",
+            label: "Work",
+            percentage: 90,
+            rationale: "Senior frontend work maps to the job scope.",
+            score: 4.5,
+        },
+        {
+            dimension: "skill",
+            label: "Skill",
+            percentage: 100,
+            rationale: "React, XState, and Workers are present.",
+            score: 5,
+        },
+        {
+            dimension: "overall",
+            label: "Overall",
+            percentage: 90,
+            rationale: "Strong frontend and edge platform fit.",
+            score: 4.5,
+        },
+    ],
+    intro: {
+        advantages: "Strong React and Workers delivery evidence.",
+        disadvantages: "Accessibility impact is lighter than requested.",
+    },
+};
 
 class FixtureAi {
+    readonly gatewayRequests: unknown[] = [];
+
     async run(
         _model: string,
         _input: unknown,
@@ -35,24 +84,21 @@ class FixtureAi {
         run: (request: unknown, options?: unknown) => Promise<Response>;
     } {
         return {
-            run: async () => {
-                return Response.json({
-                    candidates: [
-                        {
-                            content: {
-                                parts: [
-                                    {
-                                        text: resumeAnalysisToFieldTags(
-                                            sampleResume,
-                                        ).join(""),
-                                    },
-                                ],
-                                role: "model",
-                            },
-                            finishReason: "STOP",
-                        },
-                    ],
-                });
+            run: async (request) => {
+                this.gatewayRequests.push(request);
+
+                if (gatewayEndpoint(request).includes(":generateContent")) {
+                    const body = JSON.stringify(request);
+                    const payload = body.includes("Match this resume")
+                        ? sampleMatchPayload
+                        : sampleJobDescription;
+
+                    return geminiResponse(JSON.stringify(payload));
+                }
+
+                return geminiResponse(
+                    resumeAnalysisToFieldTags(sampleResume).join(""),
+                );
             },
         };
     }
@@ -69,7 +115,57 @@ class FixtureAi {
     }
 }
 
+function gatewayEndpoint(request: unknown): string {
+    if (!request || typeof request !== "object") {
+        return "";
+    }
+
+    const endpoint = (request as { endpoint?: unknown }).endpoint;
+
+    return typeof endpoint === "string" ? endpoint : "";
+}
+
+function geminiResponse(text: string): Response {
+    return Response.json({
+        candidates: [
+            {
+                content: {
+                    parts: [{ text }],
+                    role: "model",
+                },
+                finishReason: "STOP",
+            },
+        ],
+    });
+}
+
 describe("Cloudflare Durable Object storage behavior", () => {
+    it("uses Gemini 3.5 Flash for JD analysis and Markdown Match", async () => {
+        const ai = new FixtureAi();
+        const services = createCloudflareServices(workerEnvWithAi(ai));
+        const jd = await services.ai.analyzeJobDescription(
+            "Senior frontend engineer role requiring React, XState, Cloudflare Workers, and accessibility experience.",
+        );
+        const resume: ResumeDocument = {
+            createdAt: "2026-06-26T00:00:00.000Z",
+            resume: sampleResume,
+            resumeId: "resume-1",
+            status: "ready",
+            updatedAt: "2026-06-26T00:00:00.000Z",
+        };
+
+        const match = await services.ai.matchResumeToJobDescription(jd, resume);
+
+        expect(jd.requiredSkills).toContain("React");
+        expect(
+            match.dimensions.map((dimension) => dimension.dimension),
+        ).toEqual(["edu", "project", "work", "skill", "overall"]);
+        expect(ai.gatewayRequests.map(gatewayEndpoint)).toEqual([
+            "v1beta/models/gemini-3.5-flash:generateContent",
+            "v1beta/models/gemini-3.5-flash:generateContent",
+        ]);
+    });
+
     it("uploads through the Worker API and reaches ready through the queue consumer", async () => {
         const ai = new FixtureAi();
         const bytes = pdfWithPages(2, "Ava Chen");
