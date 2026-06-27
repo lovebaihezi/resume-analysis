@@ -289,7 +289,7 @@ describe("resume analysis UI behavior", () => {
 
         await user.click(screen.getByRole("button", { name: /add jd/i }));
         await user.type(
-            screen.getByLabelText(/paste jd text/i),
+            screen.getByLabelText(/jd description/i),
             "Senior frontend engineer with React and Cloudflare Workers experience.",
         );
         await user.click(screen.getByRole("button", { name: /analyze jd/i }));
@@ -312,7 +312,7 @@ describe("resume analysis UI behavior", () => {
 
         await user.click(screen.getByRole("button", { name: /add jd/i }));
         await user.type(
-            screen.getByLabelText(/paste jd text/i),
+            screen.getByLabelText(/jd description/i),
             "Senior frontend engineer with React, XState, Cloudflare Workers, and accessibility ownership.",
         );
         await user.click(screen.getByRole("button", { name: /analyze jd/i }));

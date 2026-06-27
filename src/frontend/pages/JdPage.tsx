@@ -471,19 +471,19 @@ function AddJdDrawer({
                     </button>
                 </div>
                 <form
-                    aria-labelledby="jd-input-title"
                     className="flex min-h-0 flex-1 flex-col gap-4"
                     onSubmit={onSubmit}
                 >
-                    <h3 className="sr-only" id="jd-input-title">
-                        New JD input
-                    </h3>
-                    <div className="form-control min-h-0 flex-1">
-                        <label className="label" htmlFor="new-jd-text">
-                            <span className="label-text">Paste JD Text</span>
+                    <div className="flex min-h-0 flex-1 flex-col gap-2">
+                        <label
+                            className="text-sm font-medium"
+                            htmlFor="new-jd-text"
+                            id="jd-input-title"
+                        >
+                            JD Description
                         </label>
                         <textarea
-                            className="textarea textarea-bordered min-h-72 flex-1 resize-none text-sm leading-6 sm:min-h-96"
+                            className="textarea textarea-bordered min-h-72 w-full flex-1 resize-none text-sm leading-6 sm:min-h-96"
                             id="new-jd-text"
                             onChange={(event) =>
                                 onTextChange(event.target.value)
@@ -497,7 +497,7 @@ function AddJdDrawer({
                             <span>{error}</span>
                         </div>
                     ) : null}
-                    <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                    <div className="mt-auto flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
                         <button
                             className="btn btn-ghost w-full sm:w-auto"
                             onClick={onClose}
