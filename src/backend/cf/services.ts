@@ -41,14 +41,96 @@ const DEFAULT_AI_GATEWAY_NAME = "collects-auto-ai";
 const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash";
 const GOOGLE_AI_STUDIO_PROVIDER = "google-ai-studio";
 const MAX_RESUME_MARKDOWN_CHARS = 3_500;
-const JD_EXTRACTION_MAX_TOKENS = 2048;
-const JD_MATCH_MAX_TOKENS = 2048;
 const MAX_MATCH_RESUME_CHARS = 6_000;
-const GEMINI_RESUME_MAX_OUTPUT_TOKENS = 8192;
 const RESUME_SECTION_PATTERN =
     /(?:^|\n)(?:#{1,6}\s*)?(Education|Work Experience|Open-Source Contributions|Research Experience|Projects?|Skills)\b[^\n]*(?:\n[\s\S]*?)(?=\n(?:#{1,6}\s*)?(?:Education|Work Experience|Open-Source Contributions|Research Experience|Projects?|Skills)\b|$)/gi;
 const RESUME_REGISTRY_NAME = "__resume_registry__";
 const JD_STORE_NAME = "__jd_store__";
+
+type GeminiSchema = {
+    readonly enum?: readonly string[];
+    readonly items?: GeminiSchema;
+    readonly maximum?: number;
+    readonly maxItems?: number;
+    readonly minimum?: number;
+    readonly minItems?: number;
+    readonly properties?: Record<string, GeminiSchema>;
+    readonly required?: readonly string[];
+    readonly type: "array" | "integer" | "number" | "object" | "string";
+};
+
+const geminiStringSchema = { type: "string" } satisfies GeminiSchema;
+const geminiStringArraySchema = {
+    items: geminiStringSchema,
+    type: "array",
+} satisfies GeminiSchema;
+
+const jobDescriptionResponseSchema = {
+    properties: {
+        des: geminiStringSchema,
+        id: geminiStringSchema,
+        rawText: geminiStringSchema,
+        requiredExperiences: geminiStringArraySchema,
+        requiredSkills: geminiStringArraySchema,
+        tags: geminiStringArraySchema,
+        title: geminiStringSchema,
+    },
+    required: [
+        "id",
+        "title",
+        "rawText",
+        "des",
+        "tags",
+        "requiredSkills",
+        "requiredExperiences",
+    ],
+    type: "object",
+} satisfies GeminiSchema;
+
+const resumeMatchDimensionResponseSchema = {
+    properties: {
+        dimension: {
+            enum: ["edu", "project", "work", "skill", "overall"],
+            type: "string",
+        },
+        label: geminiStringSchema,
+        percentage: {
+            maximum: 100,
+            minimum: 0,
+            type: "integer",
+        },
+        rationale: geminiStringSchema,
+        score: {
+            maximum: 5,
+            minimum: 0,
+            type: "number",
+        },
+    },
+    required: ["dimension", "label", "score", "percentage", "rationale"],
+    type: "object",
+} satisfies GeminiSchema;
+
+const resumeMatchResponseSchema = {
+    properties: {
+        dimensions: {
+            items: resumeMatchDimensionResponseSchema,
+            maxItems: 5,
+            minItems: 5,
+            type: "array",
+        },
+        intro: {
+            properties: {
+                advantages: geminiStringSchema,
+                disadvantages: geminiStringSchema,
+            },
+            required: ["advantages", "disadvantages"],
+            type: "object",
+        },
+    },
+    required: ["dimensions", "intro"],
+    type: "object",
+} satisfies GeminiSchema;
+
 const MATCH_DIMENSION_CONFIG = [
     { dimension: "edu", label: "Edu" },
     { dimension: "project", label: "Project" },
@@ -325,10 +407,10 @@ class WorkersAiExtractor implements AiExtractor {
         }
 
         const startedAt = Date.now();
-        const maxTokens =
+        const responseSchema =
             task === "resume-match"
-                ? JD_MATCH_MAX_TOKENS
-                : JD_EXTRACTION_MAX_TOKENS;
+                ? resumeMatchResponseSchema
+                : jobDescriptionResponseSchema;
         const endpoint = `v1beta/models/${this.geminiModel}:generateContent`;
         let response: Response;
         let payload: unknown;
@@ -337,7 +419,6 @@ class WorkersAiExtractor implements AiExtractor {
             endpoint,
             event: "gateway:model:start",
             gatewayId: this.gatewayId,
-            maxTokens,
             model: this.geminiModel,
             promptChars: content.length,
             provider: GOOGLE_AI_STUDIO_PROVIDER,
@@ -345,40 +426,30 @@ class WorkersAiExtractor implements AiExtractor {
         });
 
         try {
-            response = await this.ai.gateway(this.gatewayId).run(
-                {
-                    endpoint,
-                    headers: {
-                        "Content-Type": "application/json",
-                    },
-                    provider: GOOGLE_AI_STUDIO_PROVIDER,
-                    query: {
-                        contents: [
-                            {
-                                parts: [
-                                    {
-                                        text: `You analyze hiring documents and return only valid JSON. Do not include reasoning, explanations, or markdown.\n\n${content}`,
-                                    },
-                                ],
-                                role: "user",
-                            },
-                        ],
-                        generationConfig: {
-                            maxOutputTokens: maxTokens,
-                            responseMimeType: "application/json",
-                            temperature: 0,
+            response = await this.ai.gateway(this.gatewayId).run({
+                endpoint,
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                provider: GOOGLE_AI_STUDIO_PROVIDER,
+                query: {
+                    contents: [
+                        {
+                            parts: [
+                                {
+                                    text: `You analyze hiring documents and return only valid JSON. Do not include reasoning, explanations, or markdown.\n\n${content}`,
+                                },
+                            ],
+                            role: "user",
                         },
+                    ],
+                    generationConfig: {
+                        responseMimeType: "application/json",
+                        responseSchema,
+                        temperature: 0,
                     },
                 },
-                {
-                    gateway: {
-                        cacheTtl: 3600,
-                        collectLog: true,
-                        id: this.gatewayId,
-                        skipCache: false,
-                    },
-                },
-            );
+            });
         } catch (error) {
             console.error("resume-ai", {
                 durationMs: elapsed(startedAt),
@@ -498,7 +569,6 @@ class WorkersAiExtractor implements AiExtractor {
             endpoint,
             event: "gateway:model:stream:start",
             gatewayId: this.gatewayId,
-            maxOutputTokens: GEMINI_RESUME_MAX_OUTPUT_TOKENS,
             model: this.geminiModel,
             promptChars: content.length,
             provider: GOOGLE_AI_STUDIO_PROVIDER,
@@ -506,35 +576,24 @@ class WorkersAiExtractor implements AiExtractor {
         });
 
         try {
-            response = await this.ai.gateway(this.gatewayId).run(
-                {
-                    endpoint,
-                    headers: {
-                        "Content-Type": "application/json",
-                    },
-                    provider: GOOGLE_AI_STUDIO_PROVIDER,
-                    query: {
-                        contents: [
-                            {
-                                parts: [{ text: content }],
-                                role: "user",
-                            },
-                        ],
-                        generationConfig: {
-                            maxOutputTokens: GEMINI_RESUME_MAX_OUTPUT_TOKENS,
-                            temperature: 0,
+            response = await this.ai.gateway(this.gatewayId).run({
+                endpoint,
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                provider: GOOGLE_AI_STUDIO_PROVIDER,
+                query: {
+                    contents: [
+                        {
+                            parts: [{ text: content }],
+                            role: "user",
                         },
+                    ],
+                    generationConfig: {
+                        temperature: 0,
                     },
                 },
-                {
-                    gateway: {
-                        cacheTtl: 0,
-                        collectLog: true,
-                        id: this.gatewayId,
-                        skipCache: true,
-                    },
-                },
-            );
+            });
         } catch (error) {
             console.error("resume-ai", {
                 durationMs: elapsed(startedAt),
