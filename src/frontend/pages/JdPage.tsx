@@ -1,21 +1,28 @@
+import { PlusIcon, XIcon } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import type { ApiClient } from "../apiClient";
 import type {
     JdMatchResult,
     JobDescription,
+    JobDescriptionSummary,
     ResumeJdMatch,
+    ResumeSummary,
 } from "../../shared/types";
 
 type JdPageProps = {
     apiClient: ApiClient;
 };
 
+const JD_TABLE_COLUMNS =
+    "minmax(14rem,1fr) minmax(16rem,1.2fr) minmax(10rem,0.65fr) minmax(7rem,auto)";
+
 export function JdPage({ apiClient }: JdPageProps) {
-    const [rawText, setRawText] = useState("");
+    const [newJdText, setNewJdText] = useState("");
     const [error, setError] = useState<string>();
     const [isSubmitting, setIsSubmitting] = useState(false);
-    const [activeId, setActiveId] = useState<string>();
+    const [drawerOpen, setDrawerOpen] = useState(false);
+    const [selectedJdId, setSelectedJdId] = useState("");
     const [selectedResumeId, setSelectedResumeId] = useState("");
     const [matchError, setMatchError] = useState<string>();
     const [isMatching, setIsMatching] = useState(false);
@@ -38,13 +45,18 @@ export function JdPage({ apiClient }: JdPageProps) {
             },
         },
     );
-    const selectedId = activeId ?? data?.jds[0]?.id;
-    const { data: activeData } = useSWR(
-        selectedId ? ["jds.detail", selectedId] : null,
+    const savedJds = data?.jds ?? [];
+    const resumes = resumesData?.resumes ?? [];
+    const selectedJdIdForDetail = selectedJdId || savedJds[0]?.id || "";
+    const { data: selectedJdData } = useSWR(
+        selectedJdIdForDetail ? ["jds.detail", selectedJdIdForDetail] : null,
         ([, id]) => apiClient.getJdInfo(id),
     );
-    const active = activeData?.jd;
-    const canMatch = Boolean(rawText.trim() && selectedResumeId);
+    const selectedJd = selectedJdData?.jd;
+    const selectedResume =
+        resumes.find((resume) => resume.resumeId === selectedResumeId) ?? null;
+    const canAddJd = Boolean(newJdText.trim());
+    const canMatch = Boolean(selectedJd?.rawText.trim() && selectedResumeId);
 
     useEffect(() => {
         if (!isMatching) {
@@ -64,8 +76,10 @@ export function JdPage({ apiClient }: JdPageProps) {
         setIsSubmitting(true);
 
         try {
-            const result = await apiClient.analyzeJd(rawText);
-            setActiveId(result.jd.id);
+            const result = await apiClient.analyzeJd(newJdText);
+            setSelectedJdId(result.jd.id);
+            setDrawerOpen(false);
+            setNewJdText("");
             await mutate(
                 ["jds.detail", result.jd.id],
                 { jd: result.jd },
@@ -84,7 +98,7 @@ export function JdPage({ apiClient }: JdPageProps) {
     }
 
     async function onMatch(): Promise<void> {
-        if (!canMatch) {
+        if (!canMatch || !selectedJd) {
             return;
         }
 
@@ -95,13 +109,13 @@ export function JdPage({ apiClient }: JdPageProps) {
 
         try {
             const [result] = await Promise.all([
-                apiClient.matchJdResume(rawText, selectedResumeId),
+                apiClient.matchJdResume(selectedJd.rawText, selectedResumeId),
                 waitForVisibleProgress(),
             ]);
 
             setMatchProgress(100);
             setMatchResult(result);
-            setActiveId(result.jd.id);
+            setSelectedJdId(result.jd.id);
             await mutate(
                 ["jds.detail", result.jd.id],
                 { jd: result.jd },
@@ -120,226 +134,509 @@ export function JdPage({ apiClient }: JdPageProps) {
     }
 
     return (
-        <section className="px-3 py-5 sm:px-6 lg:px-10 lg:py-8">
-            <article className="mx-auto max-w-5xl overflow-hidden rounded border border-base-300 bg-base-100">
-                <form
-                    aria-labelledby="jd-input-title"
-                    className="p-4 sm:p-6 lg:p-8"
-                    onSubmit={onSubmit}
+        <section className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-7xl flex-col px-4 py-4 sm:px-8 sm:py-8">
+            <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                    <h1 className="text-2xl font-semibold">JD Editor</h1>
+                    <p className="text-base-content/70">
+                        {data?.count ?? 0} saved descriptions
+                    </p>
+                </div>
+                <button
+                    className="btn btn-primary w-full sm:w-auto"
+                    onClick={() => {
+                        setError(undefined);
+                        setDrawerOpen(true);
+                    }}
+                    type="button"
                 >
-                    <div className="mb-5">
-                        <h1
-                            className="text-xl font-semibold"
-                            id="jd-input-title"
-                        >
-                            JD Input
-                        </h1>
-                    </div>
+                    <PlusIcon aria-hidden="true" className="h-4 w-4" />
+                    Add JD
+                </button>
+            </div>
 
-                    <div className="space-y-4">
-                        <div>
-                            <label className="label" htmlFor="jd-raw-text">
-                                Job Description
-                            </label>
-                            <textarea
-                                className="textarea textarea-bordered min-h-72 w-full text-sm leading-6 sm:min-h-80 lg:min-h-96"
-                                id="jd-raw-text"
-                                onChange={(event) =>
-                                    setRawText(event.target.value)
-                                }
-                                placeholder="Paste raw JD text"
-                                value={rawText}
-                            />
-                        </div>
+            <SavedJdTable
+                jds={savedJds}
+                onSelect={setSelectedJdId}
+                selectedJdId={selectedJdIdForDetail}
+            />
 
-                        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
-                            <div>
-                                <label
-                                    className="label"
-                                    htmlFor="resume-selector"
-                                >
-                                    Uploaded Document
-                                </label>
-                                <select
-                                    className="select select-bordered w-full"
-                                    id="resume-selector"
-                                    onChange={(event) =>
-                                        setSelectedResumeId(event.target.value)
-                                    }
-                                    value={selectedResumeId}
-                                >
-                                    <option value="">Select a resume</option>
-                                    {resumesData?.resumes.map((resume) => (
-                                        <option
-                                            key={resume.resumeId}
-                                            value={resume.resumeId}
-                                        >
-                                            {resume.name}
-                                        </option>
-                                    ))}
-                                </select>
-                                {resumesData?.count === 0 ? (
-                                    <p className="mt-2 text-sm text-base-content/60">
-                                        Upload a resume before running a match.
-                                    </p>
-                                ) : null}
-                            </div>
-                            <div className="flex flex-col gap-2 sm:flex-row lg:justify-end">
-                                <button
-                                    className="btn btn-outline w-full sm:w-auto"
-                                    disabled={isSubmitting || !rawText.trim()}
-                                    type="submit"
-                                >
-                                    {isSubmitting ? (
-                                        <span className="loading loading-spinner loading-sm" />
-                                    ) : null}
-                                    Analyze JD
-                                </button>
-                                {canMatch ? (
-                                    <button
-                                        className="btn btn-primary w-full sm:w-auto"
-                                        disabled={isMatching}
-                                        onClick={() => {
-                                            void onMatch();
-                                        }}
-                                        type="button"
-                                    >
-                                        {isMatching ? (
-                                            <span className="loading loading-spinner loading-sm" />
-                                        ) : null}
-                                        Match Resume
-                                    </button>
-                                ) : null}
-                            </div>
-                        </div>
-
-                        {isMatching ? (
-                            <div className="rounded border border-info/30 bg-info/10 p-4">
-                                <div className="mb-2 flex items-center justify-between gap-3 text-sm font-medium">
-                                    <span>Analyzing resume match</span>
-                                    <span>{matchProgress}%</span>
-                                </div>
-                                <progress
-                                    aria-label="Match analysis progress"
-                                    className="progress progress-info w-full"
-                                    max={100}
-                                    value={matchProgress}
-                                />
-                            </div>
-                        ) : null}
-
-                        {error ? (
-                            <div className="alert alert-error">
-                                <span>{error}</span>
-                            </div>
-                        ) : null}
-                        {matchError ? (
-                            <div className="alert alert-error">
-                                <span>{matchError}</span>
-                            </div>
-                        ) : null}
-                    </div>
-                </form>
-
-                <JdAnalysisPanel active={active} count={data?.count ?? 0} />
-
-                {matchResult ? (
-                    <MatchResultPanel result={matchResult} />
-                ) : (
-                    <section
-                        aria-labelledby="match-result-title"
-                        className="border-t border-base-300 p-4 sm:p-6 lg:p-8"
-                    >
+            <section
+                aria-labelledby="match-builder-title"
+                className="mt-8 space-y-5"
+            >
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                    <div>
                         <h2
                             className="text-xl font-semibold"
-                            id="match-result-title"
+                            id="match-builder-title"
                         >
-                            Match Result
+                            Match JD and Resume
                         </h2>
-                        <p className="mt-3 text-sm text-base-content/70">
-                            No match result yet.
-                        </p>
-                    </section>
-                )}
-            </article>
+                    </div>
+                    <div className="grid w-full gap-3 lg:max-w-3xl lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] lg:items-end">
+                        <label className="form-control">
+                            <span className="label">
+                                <span className="label-text">
+                                    Job Description
+                                </span>
+                            </span>
+                            <select
+                                className="select select-bordered w-full"
+                                disabled={savedJds.length === 0}
+                                onChange={(event) => {
+                                    setSelectedJdId(event.target.value);
+                                }}
+                                value={selectedJdIdForDetail}
+                            >
+                                <option value="">Select a JD</option>
+                                {savedJds.map((jd) => (
+                                    <option key={jd.id} value={jd.id}>
+                                        {jd.title}
+                                    </option>
+                                ))}
+                            </select>
+                        </label>
+                        <label className="form-control">
+                            <span className="label">
+                                <span className="label-text">Resume</span>
+                            </span>
+                            <select
+                                className="select select-bordered w-full"
+                                disabled={resumes.length === 0}
+                                onChange={(event) => {
+                                    setSelectedResumeId(event.target.value);
+                                }}
+                                value={selectedResumeId}
+                            >
+                                <option value="">Select a resume</option>
+                                {resumes.map((resume) => (
+                                    <option
+                                        key={resume.resumeId}
+                                        value={resume.resumeId}
+                                    >
+                                        {resume.name}
+                                    </option>
+                                ))}
+                            </select>
+                        </label>
+                        <button
+                            className="btn btn-primary w-full lg:w-auto"
+                            disabled={!canMatch || isMatching}
+                            onClick={() => {
+                                void onMatch();
+                            }}
+                            type="button"
+                        >
+                            {isMatching ? (
+                                <span className="loading loading-spinner loading-sm" />
+                            ) : null}
+                            Match Resume
+                        </button>
+                    </div>
+                </div>
+
+                {resumesData?.count === 0 ? (
+                    <p className="text-sm text-base-content/60">
+                        Upload a resume before running a match.
+                    </p>
+                ) : null}
+
+                <div className="grid gap-4 lg:grid-cols-2">
+                    <JdPreviewPanel jd={selectedJd} />
+                    <ResumePreviewPanel resume={selectedResume} />
+                </div>
+
+                {isMatching ? (
+                    <div className="rounded border border-info/30 bg-info/10 p-4">
+                        <div className="mb-2 flex items-center justify-between gap-3 text-sm font-medium">
+                            <span>Analyzing resume match</span>
+                            <span>{matchProgress}%</span>
+                        </div>
+                        <progress
+                            aria-label="Match analysis progress"
+                            className="progress progress-info w-full"
+                            max={100}
+                            value={matchProgress}
+                        />
+                    </div>
+                ) : null}
+
+                {matchError ? (
+                    <div className="alert alert-error">
+                        <span>{matchError}</span>
+                    </div>
+                ) : null}
+            </section>
+
+            {matchResult ? (
+                <MatchResultPanel result={matchResult} />
+            ) : (
+                <section aria-labelledby="match-result-title" className="mt-8">
+                    <h2
+                        className="text-xl font-semibold"
+                        id="match-result-title"
+                    >
+                        Match Result
+                    </h2>
+                    <p className="mt-3 text-sm text-base-content/70">
+                        No match result yet.
+                    </p>
+                </section>
+            )}
+
+            <AddJdDrawer
+                error={error}
+                isOpen={drawerOpen}
+                isSubmitting={isSubmitting}
+                newJdText={newJdText}
+                onClose={() => {
+                    setDrawerOpen(false);
+                }}
+                onSubmit={onSubmit}
+                onTextChange={setNewJdText}
+                submitDisabled={isSubmitting || !canAddJd}
+            />
         </section>
     );
 }
 
-function JdAnalysisPanel({
-    active,
-    count,
+function SavedJdTable({
+    jds,
+    onSelect,
+    selectedJdId,
 }: {
-    active?: JobDescription;
-    count: number;
+    jds: JobDescriptionSummary[];
+    onSelect: (jdId: string) => void;
+    selectedJdId: string;
 }) {
     return (
-        <section
-            aria-labelledby="jd-analysis-title"
-            className="border-t border-base-300 p-4 sm:p-6 lg:p-8"
+        <div className="overflow-x-auto rounded border border-base-300 bg-base-100">
+            <table
+                aria-label="Saved job descriptions"
+                className="w-full min-w-[760px] table-fixed"
+            >
+                <thead className="border-b border-base-300 bg-base-200/70">
+                    <tr
+                        className="grid w-full items-center text-left text-sm font-semibold text-base-content/70"
+                        style={{ gridTemplateColumns: JD_TABLE_COLUMNS }}
+                    >
+                        <th className="px-4 py-3 text-left font-semibold">
+                            JD Title
+                        </th>
+                        <th className="px-4 py-3 text-left font-semibold">
+                            Tags
+                        </th>
+                        <th className="px-4 py-3 text-left font-semibold">
+                            Updated
+                        </th>
+                        <th className="px-4 py-3 text-left font-semibold">
+                            Status
+                        </th>
+                    </tr>
+                </thead>
+                <tbody className="block w-full">
+                    {jds.length === 0 ? (
+                        <tr
+                            className="grid min-h-20 w-full items-center"
+                            style={{ gridTemplateColumns: JD_TABLE_COLUMNS }}
+                        >
+                            <td
+                                className="px-4 py-5 text-base-content/60"
+                                colSpan={4}
+                                style={{ gridColumn: "1 / -1" }}
+                            >
+                                No saved JDs.
+                            </td>
+                        </tr>
+                    ) : (
+                        jds.map((jd) => (
+                            <SavedJdRow
+                                jd={jd}
+                                key={jd.id}
+                                onSelect={onSelect}
+                                selected={jd.id === selectedJdId}
+                            />
+                        ))
+                    )}
+                </tbody>
+            </table>
+        </div>
+    );
+}
+
+function SavedJdRow({
+    jd,
+    onSelect,
+    selected,
+}: {
+    jd: JobDescriptionSummary;
+    onSelect: (jdId: string) => void;
+    selected: boolean;
+}) {
+    const visibleTags = jd.tags.slice(0, 4);
+    const hiddenTagCount = Math.max(0, jd.tags.length - visibleTags.length);
+
+    return (
+        <tr
+            className="grid min-h-20 w-full items-center border-t border-base-300 text-sm first:border-t-0"
+            style={{ gridTemplateColumns: JD_TABLE_COLUMNS }}
         >
-            <div className="mb-5 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
-                <h2 className="text-xl font-semibold" id="jd-analysis-title">
-                    JD Analysis Result
-                </h2>
-                <p className="text-sm text-base-content/70">
-                    {count} saved descriptions
-                </p>
-            </div>
-            {active ? (
-                <div className="space-y-5">
+            <td className="min-w-0 px-4">
+                <button
+                    className="link link-info block max-w-full truncate text-left"
+                    onClick={() => onSelect(jd.id)}
+                    type="button"
+                >
+                    {jd.title}
+                </button>
+            </td>
+            <td className="min-w-0 px-4">
+                <div className="flex max-h-12 flex-wrap gap-2 overflow-hidden">
+                    {visibleTags.map((tag) => (
+                        <span className="badge badge-outline" key={tag}>
+                            {tag}
+                        </span>
+                    ))}
+                    {hiddenTagCount > 0 ? (
+                        <span className="badge badge-ghost">
+                            +{hiddenTagCount}
+                        </span>
+                    ) : null}
+                </div>
+            </td>
+            <td className="truncate px-4 text-base-content/70">
+                {formatDateTime(jd.updatedAt)}
+            </td>
+            <td className="px-4">
+                {selected ? (
+                    <span className="badge badge-primary">Selected</span>
+                ) : (
+                    <button
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => onSelect(jd.id)}
+                        type="button"
+                    >
+                        Select
+                    </button>
+                )}
+            </td>
+        </tr>
+    );
+}
+
+function AddJdDrawer({
+    error,
+    isOpen,
+    isSubmitting,
+    newJdText,
+    onClose,
+    onSubmit,
+    onTextChange,
+    submitDisabled,
+}: {
+    error?: string;
+    isOpen: boolean;
+    isSubmitting: boolean;
+    newJdText: string;
+    onClose: () => void;
+    onSubmit: (event: React.FormEvent<HTMLFormElement>) => void;
+    onTextChange: (value: string) => void;
+    submitDisabled: boolean;
+}) {
+    if (!isOpen) {
+        return null;
+    }
+
+    return (
+        <div aria-label="Add JD drawer" className="fixed inset-0 z-50">
+            <button
+                aria-label="Close JD drawer"
+                className="absolute inset-0 h-full w-full bg-black/35"
+                onClick={onClose}
+                type="button"
+            />
+            <aside className="absolute bottom-0 right-0 top-0 flex w-full max-w-2xl flex-col overflow-y-auto bg-base-100 p-4 shadow-2xl sm:p-8">
+                <div className="mb-5 flex items-start justify-between gap-4">
                     <div>
-                        <h3 className="text-lg font-semibold">
-                            {active.title}
-                        </h3>
-                        <p className="mt-2 text-sm leading-6">{active.des}</p>
-                        <div className="mt-4 flex flex-wrap gap-2">
-                            {active.tags.map((tag) => (
+                        <h2 className="text-xl font-semibold">Add JD</h2>
+                    </div>
+                    <button
+                        aria-label="Close JD drawer"
+                        className="btn btn-ghost btn-square btn-sm"
+                        onClick={onClose}
+                        type="button"
+                    >
+                        <XIcon aria-hidden="true" className="h-4 w-4" />
+                    </button>
+                </div>
+                <form
+                    aria-labelledby="jd-input-title"
+                    className="flex min-h-0 flex-1 flex-col gap-4"
+                    onSubmit={onSubmit}
+                >
+                    <h3 className="sr-only" id="jd-input-title">
+                        New JD input
+                    </h3>
+                    <div className="form-control min-h-0 flex-1">
+                        <label className="label" htmlFor="new-jd-text">
+                            <span className="label-text">Paste JD Text</span>
+                        </label>
+                        <textarea
+                            className="textarea textarea-bordered min-h-72 flex-1 resize-none text-sm leading-6 sm:min-h-96"
+                            id="new-jd-text"
+                            onChange={(event) =>
+                                onTextChange(event.target.value)
+                            }
+                            placeholder="Paste raw JD text"
+                            value={newJdText}
+                        />
+                    </div>
+                    {error ? (
+                        <div className="alert alert-error">
+                            <span>{error}</span>
+                        </div>
+                    ) : null}
+                    <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                        <button
+                            className="btn btn-ghost w-full sm:w-auto"
+                            onClick={onClose}
+                            type="button"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            className="btn btn-primary w-full sm:w-auto"
+                            disabled={submitDisabled}
+                            type="submit"
+                        >
+                            {isSubmitting ? (
+                                <span className="loading loading-spinner loading-sm" />
+                            ) : null}
+                            Analyze JD
+                        </button>
+                    </div>
+                </form>
+            </aside>
+        </div>
+    );
+}
+
+function JdPreviewPanel({ jd }: { jd?: JobDescription }) {
+    return (
+        <section
+            aria-labelledby="selected-jd-title"
+            className="rounded border border-base-300 bg-base-100 p-4"
+        >
+            <h3 className="text-lg font-semibold" id="selected-jd-title">
+                Selected JD
+            </h3>
+            {jd ? (
+                <div className="mt-4 space-y-5">
+                    <div>
+                        <h4 className="font-semibold">{jd.title}</h4>
+                        <p className="mt-2 text-sm leading-6 text-base-content/80">
+                            {jd.des}
+                        </p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                            {jd.tags.map((tag) => (
                                 <span className="badge badge-info" key={tag}>
                                     {tag}
                                 </span>
                             ))}
                         </div>
                     </div>
-
                     <div className="grid gap-5 md:grid-cols-2">
-                        <div>
-                            <h4 className="font-medium">Required Skills</h4>
-                            <ul className="mt-2 list-disc space-y-1 pl-5">
-                                {active.requiredSkills.map((skill) => (
-                                    <li key={skill}>{skill}</li>
-                                ))}
-                            </ul>
-                        </div>
-                        <div>
-                            <h4 className="font-medium">
-                                Required Experiences
-                            </h4>
-                            <ul className="mt-2 list-disc space-y-1 pl-5">
-                                {active.requiredExperiences.map(
-                                    (experience) => (
-                                        <li key={experience}>{experience}</li>
-                                    ),
-                                )}
-                            </ul>
-                        </div>
+                        <RequirementList
+                            items={jd.requiredSkills}
+                            title="Required Skills"
+                        />
+                        <RequirementList
+                            items={jd.requiredExperiences}
+                            title="Required Experiences"
+                        />
                     </div>
                 </div>
             ) : (
-                <p className="text-sm text-base-content/70">
-                    No JD analyzed yet.
+                <p className="mt-3 text-sm text-base-content/70">
+                    Select a saved JD to preview it.
                 </p>
             )}
         </section>
     );
 }
 
-function MatchResultPanel({ result }: { result: JdMatchResult }) {
+function ResumePreviewPanel({ resume }: { resume: ResumeSummary | null }) {
     return (
         <section
-            aria-labelledby="match-result-title"
-            className="border-t border-base-300 p-4 sm:p-6 lg:p-8"
+            aria-labelledby="selected-resume-title"
+            className="rounded border border-base-300 bg-base-100 p-4"
         >
+            <h3 className="text-lg font-semibold" id="selected-resume-title">
+                Selected Resume
+            </h3>
+            {resume ? (
+                <div className="mt-4 space-y-4">
+                    <div>
+                        <h4 className="font-semibold">{resume.name}</h4>
+                        <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
+                            <div>
+                                <dt className="text-base-content/60">
+                                    Work Duration
+                                </dt>
+                                <dd className="font-medium">
+                                    {resume.workDuration}
+                                </dd>
+                            </div>
+                            <div>
+                                <dt className="text-base-content/60">
+                                    Highest Education
+                                </dt>
+                                <dd className="font-medium">
+                                    {resume.highestEducation}
+                                </dd>
+                            </div>
+                        </dl>
+                    </div>
+                    <div>
+                        <h4 className="font-medium">Skills</h4>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                            {resume.skills.map((skill) => (
+                                <span
+                                    className="badge badge-outline"
+                                    key={skill}
+                                >
+                                    {skill}
+                                </span>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            ) : (
+                <p className="mt-3 text-sm text-base-content/70">
+                    Select a resume to preview it.
+                </p>
+            )}
+        </section>
+    );
+}
+
+function RequirementList({ items, title }: { items: string[]; title: string }) {
+    return (
+        <div>
+            <h4 className="font-medium">{title}</h4>
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-sm">
+                {items.map((item) => (
+                    <li key={item}>{item}</li>
+                ))}
+            </ul>
+        </div>
+    );
+}
+
+function MatchResultPanel({ result }: { result: JdMatchResult }) {
+    return (
+        <section aria-labelledby="match-result-title" className="mt-8">
             <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
                 <div>
                     <h2
@@ -545,4 +842,17 @@ function waitForVisibleProgress(): Promise<void> {
     return new Promise((resolve) => {
         window.setTimeout(resolve, 900);
     });
+}
+
+function formatDateTime(value: string): string {
+    const date = new Date(value);
+
+    if (Number.isNaN(date.getTime())) {
+        return value;
+    }
+
+    return new Intl.DateTimeFormat(undefined, {
+        dateStyle: "medium",
+        timeStyle: "short",
+    }).format(date);
 }
