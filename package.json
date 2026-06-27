@@ -26,6 +26,7 @@
         "@xstate/react": "^6.1.0",
         "arktype": "^2.2.1",
         "express": "^5.2.1",
+        "katex": "^0.17.0",
         "react": "^19.2.7",
         "react-dom": "^19.2.7",
         "react-router-dom": "^7.18.0",

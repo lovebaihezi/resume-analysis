@@ -108,8 +108,14 @@ describe("resume analysis UI behavior", () => {
             await screen.findByText(/converting pdf to markdown/i),
         ).toBeInTheDocument();
         expect(
-            await screen.findByLabelText("basic.name assigned Ava Chen"),
-        ).toBeInTheDocument();
+            await screen.findByLabelText("Converting PDF to markdown duration"),
+        ).toHaveTextContent(/^(?:\d+ms|\d+\.\d+s)$/);
+        const tokenRow = await screen.findByLabelText(
+            "basic.name assigned Ava Chen",
+        );
+
+        expect(tokenRow).toBeInTheDocument();
+        expect(tokenRow.querySelector(".katex")).toBeTruthy();
         expect(window.location.pathname).toBe("/");
     });
 

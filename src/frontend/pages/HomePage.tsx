@@ -1,4 +1,6 @@
 import { siGoogledocs } from "simple-icons";
+import katex from "katex";
+import "katex/dist/katex.min.css";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSWRConfig } from "swr";
 import type { ApiClient, UploadSource } from "../apiClient";
@@ -227,6 +229,8 @@ function ExtractionStreamPreview({
     progressText: string;
     tokens: ExtractionToken[];
 }) {
+    const now = useLiveNow(messages.length > 0);
+
     return (
         <aside
             aria-busy="true"
@@ -249,19 +253,31 @@ function ExtractionStreamPreview({
                 <p className="mt-3 text-sm text-base-content/70">
                     {progressText}
                 </p>
-                <div className="mt-5 space-y-3">
+                <div className="mt-5 grid gap-3 sm:grid-cols-2">
                     {messages.length > 0 ? (
                         messages.map((message, index) => (
                             <div
-                                className="flex items-center gap-3 rounded border border-base-300 bg-base-200/60 px-3 py-2 text-sm"
+                                className="flex items-center justify-between gap-3 rounded border border-base-300 bg-base-200/60 px-3 py-2 text-sm"
                                 key={`${message.phase}-${index}`}
                             >
-                                <span className="loading loading-spinner loading-xs text-info" />
-                                <span>{message.message}</span>
+                                <span className="flex min-w-0 items-center gap-3">
+                                    <span className="loading loading-spinner loading-xs shrink-0 text-info" />
+                                    <span className="truncate">
+                                        {message.message}
+                                    </span>
+                                </span>
+                                <span
+                                    aria-label={`${message.message} duration`}
+                                    className="badge badge-outline whitespace-nowrap font-mono text-[0.7rem]"
+                                >
+                                    {formatDuration(
+                                        statusDurationMs(messages, index, now),
+                                    )}
+                                </span>
                             </div>
                         ))
                     ) : (
-                        <div className="space-y-2">
+                        <div className="space-y-2 sm:col-span-2">
                             <div className="skeleton h-4 w-2/3" />
                             <div className="skeleton h-4 w-full" />
                         </div>
@@ -273,10 +289,10 @@ function ExtractionStreamPreview({
                             {tokens.map((token, index) => (
                                 <li
                                     aria-label={`${token.path} assigned ${token.value}`}
-                                    className="min-w-0 px-3 py-2 font-mono text-xs leading-5 break-words text-base-content/80"
+                                    className="min-w-0 px-3 py-2 text-sm leading-5 break-words text-base-content/80"
                                     key={`${token.path}-${index}`}
                                 >
-                                    {latexAssignment(token)}
+                                    <RenderedLatexAssignment token={token} />
                                 </li>
                             ))}
                         </ul>
@@ -293,12 +309,78 @@ function ExtractionStreamPreview({
     );
 }
 
+function RenderedLatexAssignment({ token }: { token: ExtractionToken }) {
+    const expression = useMemo(() => latexAssignment(token), [token]);
+    const html = useMemo(() => renderLatexAssignment(expression), [expression]);
+
+    return (
+        <span
+            className="inline-block max-w-full overflow-x-auto align-middle"
+            dangerouslySetInnerHTML={{ __html: html }}
+        />
+    );
+}
+
+function renderLatexAssignment(expression: string): string {
+    return katex.renderToString(expression, {
+        displayMode: false,
+        strict: "ignore",
+        throwOnError: false,
+        trust: false,
+    });
+}
+
 function latexAssignment(token: ExtractionToken): string {
-    return `\\(\\mathrm{${escapeLatex(token.path)}} \\leftarrow \\text{${escapeLatex(token.value)}}\\)`;
+    return `\\mathrm{${escapeLatex(token.path)}} \\leftarrow \\text{${escapeLatex(token.value)}}`;
+}
+
+function useLiveNow(enabled: boolean): number {
+    const [now, setNow] = useState(() => Date.now());
+
+    useEffect(() => {
+        if (!enabled) {
+            return undefined;
+        }
+
+        const id = window.setInterval(() => setNow(Date.now()), 250);
+
+        return () => window.clearInterval(id);
+    }, [enabled]);
+
+    return now;
+}
+
+function statusDurationMs(
+    messages: ExtractionStatusMessage[],
+    index: number,
+    now: number,
+): number {
+    const current = messages[index];
+    const next = messages[index + 1];
+
+    if (!current) {
+        return 0;
+    }
+
+    return Math.max(0, (next?.receivedAt ?? now) - current.receivedAt);
+}
+
+function formatDuration(durationMs: number): string {
+    if (durationMs < 1_000) {
+        return `${durationMs}ms`;
+    }
+
+    return `${(durationMs / 1_000).toFixed(1)}s`;
 }
 
 function escapeLatex(value: string): string {
-    return value.replace(/[\\{}_$&#%]/g, (char) => `\\${char}`);
+    return value
+        .replace(/\\/g, "\\textbackslash{}")
+        .replace(/\^/g, "\\textasciicircum{}")
+        .replace(/~/g, "\\textasciitilde{}")
+        .replace(/[{}_$&#%]/g, (char) => `\\${char}`)
+        .replace(/\s+/g, " ")
+        .trim();
 }
 
 function isPdf(file: File): boolean {
