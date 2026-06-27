@@ -36,47 +36,38 @@ flowchart LR
     Browser -->|"Resume analysis view"| User
 ```
 
-The diagram keeps the product flow at the user-facing level: the browser sends a
-PDF to the Worker, Cloudflare AI `toMarkdown` converts it to Markdown, Gemini
-streams field tokens like `basic.name = Asuka` back through the Worker, and
-the Worker stores the extracted resume text in Cloudflare DurableObject storage.
-
-## Tech Stack Peek Reason
-
-Use the blank `Reason` bullets to write the product or engineering opinion.
-
 ### Frontend
 
 - Stack: React, React Router v7, XState, SWR, ArkType, Tailwind CSS, daisyUI
-- Reason:
+- Choosing React with XState is easy, FP with state machine is one classic and mature chooice, using daisyUI cause is beauty, for ArkType, its lightweight and performed well than Zod and others; for the SWR, Vercel real create some thing interesting. Why not Next.JS? Most of the stuff isn't that easy to be configured SSR or Hybrid, so, using manually React would be good to start the MVP.
 
 ### API
 
 - Stack: Express running inside Cloudflare Workers with `nodejs_compat`
-- Reason:
+- Choosing Cloudflare Worker to host both the frontend and API layers is convenient and reliable.
 
 ### Storage
 
 - Stack: SQLite-backed Durable Objects for resume registry, resume documents,
   and JD records
-- Reason:
+- Choosing the Durable Object is a good way for the resume the streaming data and edit states, as it can handle the stateful nature of the resume analysis process, and, it is cross worker shared.
 
 ### Async Jobs
 
 - Stack: Cloudflare Queues for background resume analysis retries
-- Reason:
+- Choosing Worker, so, choosing the Queue for job that may long and needs retry is fast.
 
 ### LLM Interaction
 
 - Stack: Workers AI `toMarkdown`, AI Gateway, Google AI Studio Gemini streaming,
   custom stream-token parsing algorithm
-- Reason:
+- Choosing custom stream token cause we wanted first token is as fast as enough, though the toMarkdown will slow it down, but, the content extraction isn't that slow, and, the design of customize token parsing providing much abstractions, and, able to handle the streaming nature of the model output.
 
 ### Validation and Tests
 
 - Stack: ArkType schemas, Vitest integration/browser/Workers tests, Playwright
   e2e entrypoint, Oxlint, Prettier
-- Reason:
+- For the test, we don't write the Unit test or any test that needs to check the internal data state, cause, backend needs scale, you can't assume it's arch or layout or layer won't changed much, so, how user use it is the stable and easy to mantain test. And, using Arktype with it is easy.
 
 ## Streaming Resume Shape
 
