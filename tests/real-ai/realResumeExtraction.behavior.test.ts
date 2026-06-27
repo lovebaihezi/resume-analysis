@@ -102,7 +102,7 @@ async function postResume(bytes: Uint8Array): Promise<ResumeUploadResult> {
             method: "POST",
         }),
     );
-    const responseText = await response.text();
+    const responseText = await response.clone().text();
 
     logRealAiTest("upload:response", {
         bodyPreview: responseText.slice(0, 240),
@@ -111,7 +111,7 @@ async function postResume(bytes: Uint8Array): Promise<ResumeUploadResult> {
     });
     expect(response.status).toBe(202);
 
-    const upload = parseResumeUploadResult(JSON.parse(responseText));
+    const upload = parseResumeUploadResult(await response.json());
 
     logRealAiTest("upload:accepted", {
         resumeId: upload.resumeId,
@@ -126,7 +126,7 @@ async function getResume(resumeId: string): Promise<ResumeInfoResult> {
     const response = await workerExports.default.fetch(
         new Request(`${API_ORIGIN}/api/resumes/${resumeId}`),
     );
-    const responseText = await response.text();
+    const responseText = await response.clone().text();
 
     logRealAiTest("detail:response", {
         bodyPreview: responseText.slice(0, 240),
@@ -136,7 +136,7 @@ async function getResume(resumeId: string): Promise<ResumeInfoResult> {
     });
     expect(response.status).toBe(200);
 
-    return parseResumeInfoResult(JSON.parse(responseText));
+    return parseResumeInfoResult(await response.json());
 }
 
 async function getResumeStatus(resumeId: string): Promise<ResumeStatusResult> {
@@ -144,7 +144,7 @@ async function getResumeStatus(resumeId: string): Promise<ResumeStatusResult> {
     const response = await workerExports.default.fetch(
         new Request(`${API_ORIGIN}/api/resumes/${resumeId}/status`),
     );
-    const responseText = await response.text();
+    const responseText = await response.clone().text();
 
     if (response.status !== 200) {
         logRealAiTest("status:response:error", {
@@ -157,7 +157,7 @@ async function getResumeStatus(resumeId: string): Promise<ResumeStatusResult> {
     expect(response.status).toBe(200);
 
     return {
-        ...parseResumeStatusResult(JSON.parse(responseText)),
+        ...parseResumeStatusResult(await response.json()),
         requestDurationMs: elapsed(startedAt),
     } as ResumeStatusResult & { requestDurationMs: number };
 }

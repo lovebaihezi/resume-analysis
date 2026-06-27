@@ -1,4 +1,8 @@
 import { expect, type Page, test } from "@playwright/test";
+import {
+    parseResumeStatusResult,
+    parseResumeUploadResult,
+} from "../../src/shared/schemas";
 import { pdfWithPages } from "../fixtures/pdf";
 
 const baseURL = process.env.E2E_BASE_URL;
@@ -9,10 +13,10 @@ test.describe("deployed Cloudflare Worker app", () => {
         "Set E2E_BASE_URL to run against a deployed Worker URL.",
     );
 
-    test("uploads a PDF through the real app and preserves it after refresh", async ({
+    test("uploads a PDF through the real app, preserves it after refresh, and archives it", async ({
         page,
     }) => {
-        let resumeId: string | undefined;
+        let cleanupResumeId: string | undefined;
 
         try {
             await page.goto(baseURL!);
@@ -20,31 +24,91 @@ test.describe("deployed Cloudflare Worker app", () => {
                 page.getByRole("navigation", { name: /primary/i }),
             ).toBeVisible();
 
+            const uploadResponsePromise = page.waitForResponse(
+                (response) => {
+                    const request = response.request();
+
+                    return (
+                        request.method() === "POST" &&
+                        new URL(response.url()).pathname ===
+                            "/api/resumes/analyze"
+                    );
+                },
+                { timeout: 30_000 },
+            );
+
             await page.getByLabel(/choose resume pdf/i).setInputFiles({
                 name: "ava-chen.pdf",
                 mimeType: "application/pdf",
                 buffer: pdfWithPages(1, "Ava Chen"),
             });
 
+            const uploadResponse = await uploadResponsePromise.catch(
+                () => undefined,
+            );
+
             await expect(page).toHaveURL(/\/resumes\/.+/, {
                 timeout: 120_000,
             });
-            resumeId = resumeIdFromUrl(page.url());
+            const routedResumeId = resumeIdFromUrl(page.url());
+
+            if (!routedResumeId) {
+                throw new Error("Resume detail URL did not include a resumeId");
+            }
+
+            if (uploadResponse) {
+                expect(uploadResponse.status()).toBe(202);
+                cleanupResumeId = parseResumeUploadResult(
+                    await uploadResponse.json(),
+                ).resumeId;
+            } else {
+                cleanupResumeId = routedResumeId;
+                const statusResponse = await page.request.get(
+                    resumeStatusUrl(cleanupResumeId),
+                );
+
+                expect(statusResponse.status()).toBe(200);
+                expect(
+                    parseResumeStatusResult(await statusResponse.json())
+                        .resumeId,
+                ).toBe(cleanupResumeId);
+            }
+
+            expect(routedResumeId).toBe(cleanupResumeId);
             await expectResumeDetailVisible(page);
 
             await page.reload();
             await expectResumeDetailVisible(page);
 
             await page.getByRole("link", { name: /uploaded resumes/i }).click();
-            await expect(page.getByRole("table")).toContainText(/Ava/i);
+            const resumePath = `/resumes/${encodeURIComponent(cleanupResumeId)}`;
+            const resumeLink = page.locator(`a[href="${resumePath}"]`);
+            const resumeRow = page.locator("tr", { has: resumeLink });
+
+            await expect(resumeRow).toContainText(/Ava/i);
 
             await page.reload();
-            await expect(page.getByRole("table")).toContainText(/Ava/i);
+            await expect(resumeRow).toContainText(/Ava/i);
+
+            await resumeRow.getByRole("button", { name: /archive/i }).click();
+            await expect(resumeLink).toHaveCount(0);
+
+            const archivedDetail = await page.request.get(
+                resumeDetailUrl(cleanupResumeId),
+            );
+
+            expect(archivedDetail.status()).toBe(404);
+            cleanupResumeId = undefined;
         } finally {
-            if (resumeId) {
-                await page.request.delete(archiveUrl(resumeId)).catch(() => {
-                    // Best-effort cleanup for deployed e2e runs.
-                });
+            const cleanupTargetId =
+                cleanupResumeId ?? resumeIdFromUrl(page.url());
+
+            if (cleanupTargetId) {
+                await page.request
+                    .delete(resumeDetailUrl(cleanupTargetId))
+                    .catch(() => {
+                        // Best-effort cleanup for deployed e2e runs.
+                    });
             }
         }
     });
@@ -52,6 +116,7 @@ test.describe("deployed Cloudflare Worker app", () => {
 
 async function expectResumeDetailVisible(page: Page): Promise<void> {
     await expect(page.locator("main")).toContainText(/Ava Chen/i);
+    await expect(page.locator("main pre")).toContainText('"rawText"');
 }
 
 function resumeIdFromUrl(value: string): string | undefined {
@@ -60,9 +125,16 @@ function resumeIdFromUrl(value: string): string | undefined {
     return match?.[1] ? decodeURIComponent(match[1]) : undefined;
 }
 
-function archiveUrl(resumeId: string): string {
+function resumeDetailUrl(resumeId: string): string {
     return new URL(
         `/api/resumes/${encodeURIComponent(resumeId)}`,
+        baseURL!,
+    ).toString();
+}
+
+function resumeStatusUrl(resumeId: string): string {
+    return new URL(
+        `/api/resumes/${encodeURIComponent(resumeId)}/status`,
         baseURL!,
     ).toString();
 }
