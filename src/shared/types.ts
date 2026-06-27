@@ -89,6 +89,26 @@ export type JobDescriptionSummary = {
     updatedAt: string;
 };
 
+export type MatchDimension = "edu" | "project" | "work" | "skill" | "overall";
+
+export type ResumeMatchDimension = {
+    dimension: MatchDimension;
+    label: string;
+    percentage: number;
+    rationale: string;
+    score: number;
+};
+
+export type ResumeJdMatch = {
+    dimensions: ResumeMatchDimension[];
+    intro: {
+        advantages: string;
+        disadvantages: string;
+    };
+    resumeId: string;
+    resumeName: string;
+};
+
 export type ResumeUploadResult = ResumeMetadata & {
     upload: {
         bytes: number;
@@ -117,6 +137,11 @@ export type JdListResult = {
 
 export type JdInfoResult = {
     jd: JobDescription;
+};
+
+export type JdMatchResult = {
+    jd: JobDescription;
+    match: ResumeJdMatch;
 };
 
 const degreeRank = new Map([

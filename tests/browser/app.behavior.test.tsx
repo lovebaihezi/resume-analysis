@@ -14,6 +14,7 @@ import { App } from "../../src/frontend/App";
 
 describe("resume analysis UI behavior", () => {
     afterEach(() => {
+        vi.useRealTimers();
         cleanup();
         window.history.replaceState(null, "", "/");
     });
@@ -240,6 +241,70 @@ describe("resume analysis UI behavior", () => {
         expect(
             screen.getAllByText(/^Cloudflare Workers$/).length,
         ).toBeGreaterThan(0);
+    });
+
+    it("fills a JD, selects an uploaded resume, advances match progress, and displays five-dimension results", async () => {
+        await resetBackend({ seedResume: true });
+        const user = userEvent.setup();
+        renderApp("/jd");
+
+        await user.type(
+            screen.getByLabelText(/job description/i),
+            "Senior frontend engineer with React, XState, Cloudflare Workers, and accessibility ownership.",
+        );
+        expect(
+            screen.queryByRole("button", { name: /match resume/i }),
+        ).not.toBeInTheDocument();
+
+        const resumeSelector =
+            await screen.findByLabelText(/uploaded document/i);
+        const resumeOption = await screen.findByRole("option", {
+            name: "Ava Chen",
+        });
+
+        await user.selectOptions(resumeSelector, resumeOption);
+        expect(
+            screen.getByRole("button", { name: /match resume/i }),
+        ).toBeInTheDocument();
+
+        vi.useFakeTimers();
+        fireEvent.click(screen.getByRole("button", { name: /match resume/i }));
+
+        const progress = screen.getByRole("progressbar", {
+            name: /match analysis progress/i,
+        }) as HTMLProgressElement;
+        const initialProgress = progress.value;
+
+        await act(async () => {
+            vi.advanceTimersByTime(320);
+        });
+        expect(progress.value).toBeGreaterThan(initialProgress);
+
+        await act(async () => {
+            vi.advanceTimersByTime(1_000);
+            await Promise.resolve();
+        });
+        vi.useRealTimers();
+
+        const result = await screen.findByRole("region", {
+            name: /ai match result/i,
+        });
+
+        expect(
+            within(result).getByLabelText(/resume match radar chart/i),
+        ).toBeInTheDocument();
+        expect(within(result).getAllByText("Edu").length).toBeGreaterThan(0);
+        expect(within(result).getAllByText("Project").length).toBeGreaterThan(
+            0,
+        );
+        expect(within(result).getAllByText("Work").length).toBeGreaterThan(0);
+        expect(within(result).getAllByText("Skill").length).toBeGreaterThan(0);
+        expect(within(result).getAllByText("Overall").length).toBeGreaterThan(
+            0,
+        );
+        expect(within(result).getByText("5.0 / 5")).toBeInTheDocument();
+        expect(result).toHaveTextContent(/Advantages:/);
+        expect(result).toHaveTextContent(/Disadvantages:/);
     });
 });
 

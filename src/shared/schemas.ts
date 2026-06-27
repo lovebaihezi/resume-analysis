@@ -3,8 +3,10 @@ import type {
     JdAnalyzeResult,
     JdInfoResult,
     JdListResult,
+    JdMatchResult,
     ResumeAnalysis,
     ResumeInfoResult,
+    ResumeJdMatch,
     ResumeListResult,
     ResumeStatusResult,
     ResumeUploadResult,
@@ -96,6 +98,26 @@ const jobDescriptionSummary = arkType({
     updatedAt: "string",
 });
 
+const matchDimension = "'edu' | 'project' | 'work' | 'skill' | 'overall'";
+
+const resumeMatchDimension = arkType({
+    dimension: matchDimension,
+    label: "string",
+    percentage: "number",
+    rationale: "string",
+    score: "number",
+});
+
+export const resumeJdMatchSchema = arkType({
+    dimensions: resumeMatchDimension.array(),
+    intro: {
+        advantages: "string",
+        disadvantages: "string",
+    },
+    resumeId: "string",
+    resumeName: "string",
+});
+
 export const resumeUploadResultSchema = arkType({
     "archivedAt?": "string",
     createdAt: "string",
@@ -167,6 +189,11 @@ export const resumeStreamEventSchema = resumeStreamStatusEvent
     .or(resumeStreamCompleteEvent)
     .or(resumeStreamErrorEvent);
 
+export const jdMatchResultSchema = arkType({
+    jd: jobDescription,
+    match: resumeJdMatchSchema,
+});
+
 export function parseResumeUploadResult(data: unknown): ResumeUploadResult {
     return resumeUploadResultSchema.assert(data) as ResumeUploadResult;
 }
@@ -201,4 +228,12 @@ export function parseJdInfoResult(data: unknown): JdInfoResult {
 
 export function parseResumeStreamEvent(data: unknown): ResumeStreamEvent {
     return resumeStreamEventSchema.assert(data) as ResumeStreamEvent;
+}
+
+export function parseResumeJdMatch(data: unknown): ResumeJdMatch {
+    return resumeJdMatchSchema.assert(data) as ResumeJdMatch;
+}
+
+export function parseJdMatchResult(data: unknown): JdMatchResult {
+    return jdMatchResultSchema.assert(data) as JdMatchResult;
 }

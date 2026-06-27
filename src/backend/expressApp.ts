@@ -272,6 +272,53 @@ export function createApiApp(services: AppServices): express.Express {
         }),
     );
 
+    app.post(
+        "/api/jds/match",
+        asyncHandler(async (req, res) => {
+            const rawText =
+                typeof req.body?.rawText === "string"
+                    ? req.body.rawText.trim()
+                    : "";
+            const resumeId =
+                typeof req.body?.resumeId === "string"
+                    ? req.body.resumeId.trim()
+                    : "";
+
+            if (!rawText) {
+                res.status(400).json({
+                    error: "Job description text is required",
+                });
+                return;
+            }
+
+            if (!resumeId) {
+                res.status(400).json({
+                    error: "Resume id is required",
+                });
+                return;
+            }
+
+            const resume = await services.resumeStore.getById(resumeId);
+
+            if (!resume) {
+                res.status(404).json({ error: "Resume not found" });
+                return;
+            }
+
+            const analyzedJd = await services.ai.analyzeJobDescription(rawText);
+            const jd = await saveOrReuseJobDescription(
+                services.jdStore,
+                analyzedJd,
+            );
+            const match = await services.ai.matchResumeToJobDescription(
+                jd,
+                resume,
+            );
+
+            res.status(201).json({ jd, match });
+        }),
+    );
+
     app.get(
         "/api/jds",
         asyncHandler(async (_req, res) => {
@@ -308,6 +355,25 @@ function asyncHandler(handler: RequestHandler): RequestHandler {
     return (req, res, next) => {
         Promise.resolve(handler(req, res, next)).catch(next);
     };
+}
+
+async function saveOrReuseJobDescription(
+    store: AppServices["jdStore"],
+    jd: Awaited<ReturnType<AppServices["ai"]["analyzeJobDescription"]>>,
+) {
+    try {
+        return await store.save(jd);
+    } catch (error) {
+        if (error instanceof DuplicateJobDescriptionError) {
+            const existing = await store.getById(jd.id);
+
+            if (existing) {
+                return existing;
+            }
+        }
+
+        throw error;
+    }
 }
 
 const jsonErrorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
