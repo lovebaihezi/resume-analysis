@@ -53,7 +53,10 @@ describe("resume analysis UI behavior", () => {
             type: "application/pdf",
         });
 
-        await user.upload(screen.getByLabelText(/choose resume pdf/i), file);
+        await user.upload(
+            await screen.findByLabelText(/choose resume pdf/i),
+            file,
+        );
 
         await waitFor(() => {
             expect(window.location.pathname).toMatch(/^\/resumes\/.+/);
@@ -287,7 +290,9 @@ describe("resume analysis UI behavior", () => {
         const user = userEvent.setup();
         renderApp("/jd");
 
-        await user.click(screen.getByRole("button", { name: /add jd/i }));
+        await user.click(
+            await screen.findByRole("button", { name: /add jd/i }),
+        );
         await user.type(
             screen.getByLabelText(/jd description/i),
             "Senior frontend engineer with React and Cloudflare Workers experience.",
@@ -334,6 +339,27 @@ describe("resume analysis UI behavior", () => {
         expect(
             screen.getByRole("button", { name: /match resume/i }),
         ).toBeEnabled();
+        const selectedResumePanel = await screen.findByRole("region", {
+            name: /selected resume/i,
+        });
+
+        expect(
+            await within(selectedResumePanel).findByRole("heading", {
+                name: "Asuka",
+            }),
+        ).toBeInTheDocument();
+        expect(
+            within(selectedResumePanel).getByRole("heading", { name: "Edu" }),
+        ).toBeInTheDocument();
+        expect(
+            within(selectedResumePanel).getByText("National University"),
+        ).toBeInTheDocument();
+        expect(
+            within(selectedResumePanel).getByText("Resume Analyzer"),
+        ).toBeInTheDocument();
+        expect(
+            within(selectedResumePanel).getByText("React"),
+        ).toBeInTheDocument();
 
         vi.useFakeTimers();
         fireEvent.click(screen.getByRole("button", { name: /match resume/i }));
@@ -424,9 +450,7 @@ function renderApp(initialEntry: string): void {
 }
 
 async function expectResumeDetailVisible(name: string): Promise<void> {
-    expect(
-        await screen.findByText(name, { selector: "p" }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name })).toBeInTheDocument();
 }
 
 async function expectResumeDetailVisibleAfterRefresh(

@@ -1,6 +1,6 @@
 import * as stylex from "@stylexjs/stylex";
 import { useMachine } from "@xstate/react";
-import { useMemo } from "react";
+import { lazy, Suspense, useMemo } from "react";
 import { BrowserRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { SWRConfig } from "swr";
 import { appMachine } from "./appMachine";
@@ -8,10 +8,6 @@ import { AppRuntimeContext } from "./appRuntime";
 import type { ApiClient } from "./apiClient";
 import { browserApiClient } from "./apiClient";
 import { Navbar } from "./components/Navbar";
-import { HomePage } from "./pages/HomePage";
-import { InfoPage } from "./pages/InfoPage";
-import { JdPage } from "./pages/JdPage";
-import { ResumesPage } from "./pages/ResumesPage";
 import "./styles.css";
 
 type AppProps = {
@@ -25,6 +21,27 @@ const styles = stylex.create({
         minHeight: "100vh",
     },
 });
+
+const HomePage = lazy(() =>
+    import("./pages/HomePage").then((module) => ({
+        default: module.HomePage,
+    })),
+);
+const InfoPage = lazy(() =>
+    import("./pages/InfoPage").then((module) => ({
+        default: module.InfoPage,
+    })),
+);
+const JdPage = lazy(() =>
+    import("./pages/JdPage").then((module) => ({
+        default: module.JdPage,
+    })),
+);
+const ResumesPage = lazy(() =>
+    import("./pages/ResumesPage").then((module) => ({
+        default: module.ResumesPage,
+    })),
+);
 
 export function App({
     apiClient = browserApiClient,
@@ -64,27 +81,39 @@ function AppRuntime({ apiClient }: { apiClient: ApiClient }) {
                 <div {...stylex.props(styles.shell)}>
                     <Navbar apiClient={apiClient} />
                     <main>
-                        <Routes>
-                            <Route
-                                element={<HomePage apiClient={apiClient} />}
-                                path="/"
-                            />
-                            <Route
-                                element={<ResumesPage apiClient={apiClient} />}
-                                path="/resumes"
-                            />
-                            <Route
-                                element={<JdPage apiClient={apiClient} />}
-                                path="/jd"
-                            />
-                            <Route
-                                element={<InfoPage apiClient={apiClient} />}
-                                path="/resumes/:resumeId"
-                            />
-                        </Routes>
+                        <Suspense fallback={<PageLoading />}>
+                            <Routes>
+                                <Route
+                                    element={<HomePage apiClient={apiClient} />}
+                                    path="/"
+                                />
+                                <Route
+                                    element={
+                                        <ResumesPage apiClient={apiClient} />
+                                    }
+                                    path="/resumes"
+                                />
+                                <Route
+                                    element={<JdPage apiClient={apiClient} />}
+                                    path="/jd"
+                                />
+                                <Route
+                                    element={<InfoPage apiClient={apiClient} />}
+                                    path="/resumes/:resumeId"
+                                />
+                            </Routes>
+                        </Suspense>
                     </main>
                 </div>
             </SWRConfig>
         </AppRuntimeContext.Provider>
+    );
+}
+
+function PageLoading() {
+    return (
+        <div className="grid min-h-[calc(100vh-4rem)] place-items-center">
+            <span className="loading loading-spinner loading-lg text-info" />
+        </div>
     );
 }
