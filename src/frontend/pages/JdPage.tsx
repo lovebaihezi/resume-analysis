@@ -1,7 +1,11 @@
 import { useEffect, useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import type { ApiClient } from "../apiClient";
-import type { JdMatchResult, ResumeJdMatch } from "../../shared/types";
+import type {
+    JdMatchResult,
+    JobDescription,
+    ResumeJdMatch,
+} from "../../shared/types";
 
 type JdPageProps = {
     apiClient: ApiClient;
@@ -116,162 +120,216 @@ export function JdPage({ apiClient }: JdPageProps) {
     }
 
     return (
-        <section className="px-4 py-8">
-            <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_420px]">
-                <form className="space-y-4" onSubmit={onSubmit}>
-                    <div>
-                        <label className="label" htmlFor="jd-raw-text">
-                            Job Description
-                        </label>
-                        <textarea
-                            className="textarea textarea-bordered min-h-80 w-full text-sm leading-6"
-                            id="jd-raw-text"
-                            onChange={(event) => setRawText(event.target.value)}
-                            placeholder="Paste raw JD text"
-                            value={rawText}
-                        />
+        <section className="px-3 py-5 sm:px-6 lg:px-10 lg:py-8">
+            <article className="mx-auto max-w-5xl overflow-hidden rounded border border-base-300 bg-base-100">
+                <form
+                    aria-labelledby="jd-input-title"
+                    className="p-4 sm:p-6 lg:p-8"
+                    onSubmit={onSubmit}
+                >
+                    <div className="mb-5">
+                        <h1
+                            className="text-xl font-semibold"
+                            id="jd-input-title"
+                        >
+                            JD Input
+                        </h1>
                     </div>
 
-                    <div className="grid gap-4 rounded border border-base-300 bg-base-100 p-4 md:grid-cols-[minmax(0,1fr)_auto]">
+                    <div className="space-y-4">
                         <div>
-                            <label className="label" htmlFor="resume-selector">
-                                Uploaded Document
+                            <label className="label" htmlFor="jd-raw-text">
+                                Job Description
                             </label>
-                            <select
-                                className="select select-bordered w-full"
-                                id="resume-selector"
+                            <textarea
+                                className="textarea textarea-bordered min-h-72 w-full text-sm leading-6 sm:min-h-80 lg:min-h-96"
+                                id="jd-raw-text"
                                 onChange={(event) =>
-                                    setSelectedResumeId(event.target.value)
+                                    setRawText(event.target.value)
                                 }
-                                value={selectedResumeId}
-                            >
-                                <option value="">Select a resume</option>
-                                {resumesData?.resumes.map((resume) => (
-                                    <option
-                                        key={resume.resumeId}
-                                        value={resume.resumeId}
-                                    >
-                                        {resume.name}
-                                    </option>
-                                ))}
-                            </select>
-                            {resumesData?.count === 0 ? (
-                                <p className="mt-2 text-sm text-base-content/60">
-                                    Upload a resume before running a match.
-                                </p>
-                            ) : null}
-                        </div>
-                        <div className="flex items-end gap-2">
-                            <button
-                                className="btn btn-outline"
-                                disabled={isSubmitting || !rawText.trim()}
-                                type="submit"
-                            >
-                                {isSubmitting ? (
-                                    <span className="loading loading-spinner loading-sm" />
-                                ) : null}
-                                Analyze JD
-                            </button>
-                            {canMatch ? (
-                                <button
-                                    className="btn btn-primary"
-                                    disabled={isMatching}
-                                    onClick={() => {
-                                        void onMatch();
-                                    }}
-                                    type="button"
-                                >
-                                    {isMatching ? (
-                                        <span className="loading loading-spinner loading-sm" />
-                                    ) : null}
-                                    Match Resume
-                                </button>
-                            ) : null}
-                        </div>
-                    </div>
-
-                    {isMatching ? (
-                        <div className="rounded border border-info/30 bg-info/10 p-4">
-                            <div className="mb-2 flex items-center justify-between gap-3 text-sm font-medium">
-                                <span>Analyzing resume match</span>
-                                <span>{matchProgress}%</span>
-                            </div>
-                            <progress
-                                aria-label="Match analysis progress"
-                                className="progress progress-info w-full"
-                                max={100}
-                                value={matchProgress}
+                                placeholder="Paste raw JD text"
+                                value={rawText}
                             />
                         </div>
-                    ) : null}
 
-                    {error ? (
-                        <div className="alert alert-error">
-                            <span>{error}</span>
-                        </div>
-                    ) : null}
-                    {matchError ? (
-                        <div className="alert alert-error">
-                            <span>{matchError}</span>
-                        </div>
-                    ) : null}
-                </form>
-                <aside className="space-y-4">
-                    <div>
-                        <h1 className="text-xl font-semibold">Structured JD</h1>
-                        <p className="text-sm text-base-content/70">
-                            {data?.count ?? 0} saved descriptions
-                        </p>
-                    </div>
-                    {active ? (
-                        <div className="rounded border border-base-300 bg-base-100 p-5">
-                            <h2 className="text-lg font-semibold">
-                                {active.title}
-                            </h2>
-                            <p className="mt-2 text-sm leading-6">
-                                {active.des}
-                            </p>
-                            <div className="mt-4 flex flex-wrap gap-2">
-                                {active.tags.map((tag) => (
-                                    <span
-                                        className="badge badge-info"
-                                        key={tag}
-                                    >
-                                        {tag}
-                                    </span>
-                                ))}
-                            </div>
-                            <div className="mt-5">
-                                <h3 className="font-medium">Required Skills</h3>
-                                <ul className="mt-2 list-disc space-y-1 pl-5">
-                                    {active.requiredSkills.map((skill) => (
-                                        <li key={skill}>{skill}</li>
+                        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+                            <div>
+                                <label
+                                    className="label"
+                                    htmlFor="resume-selector"
+                                >
+                                    Uploaded Document
+                                </label>
+                                <select
+                                    className="select select-bordered w-full"
+                                    id="resume-selector"
+                                    onChange={(event) =>
+                                        setSelectedResumeId(event.target.value)
+                                    }
+                                    value={selectedResumeId}
+                                >
+                                    <option value="">Select a resume</option>
+                                    {resumesData?.resumes.map((resume) => (
+                                        <option
+                                            key={resume.resumeId}
+                                            value={resume.resumeId}
+                                        >
+                                            {resume.name}
+                                        </option>
                                     ))}
-                                </ul>
+                                </select>
+                                {resumesData?.count === 0 ? (
+                                    <p className="mt-2 text-sm text-base-content/60">
+                                        Upload a resume before running a match.
+                                    </p>
+                                ) : null}
                             </div>
-                            <div className="mt-5">
-                                <h3 className="font-medium">
-                                    Required Experiences
-                                </h3>
-                                <ul className="mt-2 list-disc space-y-1 pl-5">
-                                    {active.requiredExperiences.map(
-                                        (experience) => (
-                                            <li key={experience}>
-                                                {experience}
-                                            </li>
-                                        ),
-                                    )}
-                                </ul>
+                            <div className="flex flex-col gap-2 sm:flex-row lg:justify-end">
+                                <button
+                                    className="btn btn-outline w-full sm:w-auto"
+                                    disabled={isSubmitting || !rawText.trim()}
+                                    type="submit"
+                                >
+                                    {isSubmitting ? (
+                                        <span className="loading loading-spinner loading-sm" />
+                                    ) : null}
+                                    Analyze JD
+                                </button>
+                                {canMatch ? (
+                                    <button
+                                        className="btn btn-primary w-full sm:w-auto"
+                                        disabled={isMatching}
+                                        onClick={() => {
+                                            void onMatch();
+                                        }}
+                                        type="button"
+                                    >
+                                        {isMatching ? (
+                                            <span className="loading loading-spinner loading-sm" />
+                                        ) : null}
+                                        Match Resume
+                                    </button>
+                                ) : null}
                             </div>
                         </div>
-                    ) : (
-                        <div className="rounded border border-base-300 bg-base-100 p-5 text-sm text-base-content/70">
-                            No JD analyzed yet.
-                        </div>
-                    )}
-                </aside>
+
+                        {isMatching ? (
+                            <div className="rounded border border-info/30 bg-info/10 p-4">
+                                <div className="mb-2 flex items-center justify-between gap-3 text-sm font-medium">
+                                    <span>Analyzing resume match</span>
+                                    <span>{matchProgress}%</span>
+                                </div>
+                                <progress
+                                    aria-label="Match analysis progress"
+                                    className="progress progress-info w-full"
+                                    max={100}
+                                    value={matchProgress}
+                                />
+                            </div>
+                        ) : null}
+
+                        {error ? (
+                            <div className="alert alert-error">
+                                <span>{error}</span>
+                            </div>
+                        ) : null}
+                        {matchError ? (
+                            <div className="alert alert-error">
+                                <span>{matchError}</span>
+                            </div>
+                        ) : null}
+                    </div>
+                </form>
+
+                <JdAnalysisPanel active={active} count={data?.count ?? 0} />
+
+                {matchResult ? (
+                    <MatchResultPanel result={matchResult} />
+                ) : (
+                    <section
+                        aria-labelledby="match-result-title"
+                        className="border-t border-base-300 p-4 sm:p-6 lg:p-8"
+                    >
+                        <h2
+                            className="text-xl font-semibold"
+                            id="match-result-title"
+                        >
+                            Match Result
+                        </h2>
+                        <p className="mt-3 text-sm text-base-content/70">
+                            No match result yet.
+                        </p>
+                    </section>
+                )}
+            </article>
+        </section>
+    );
+}
+
+function JdAnalysisPanel({
+    active,
+    count,
+}: {
+    active?: JobDescription;
+    count: number;
+}) {
+    return (
+        <section
+            aria-labelledby="jd-analysis-title"
+            className="border-t border-base-300 p-4 sm:p-6 lg:p-8"
+        >
+            <div className="mb-5 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+                <h2 className="text-xl font-semibold" id="jd-analysis-title">
+                    JD Analysis Result
+                </h2>
+                <p className="text-sm text-base-content/70">
+                    {count} saved descriptions
+                </p>
             </div>
-            {matchResult ? <MatchResultPanel result={matchResult} /> : null}
+            {active ? (
+                <div className="space-y-5">
+                    <div>
+                        <h3 className="text-lg font-semibold">
+                            {active.title}
+                        </h3>
+                        <p className="mt-2 text-sm leading-6">{active.des}</p>
+                        <div className="mt-4 flex flex-wrap gap-2">
+                            {active.tags.map((tag) => (
+                                <span className="badge badge-info" key={tag}>
+                                    {tag}
+                                </span>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="grid gap-5 md:grid-cols-2">
+                        <div>
+                            <h4 className="font-medium">Required Skills</h4>
+                            <ul className="mt-2 list-disc space-y-1 pl-5">
+                                {active.requiredSkills.map((skill) => (
+                                    <li key={skill}>{skill}</li>
+                                ))}
+                            </ul>
+                        </div>
+                        <div>
+                            <h4 className="font-medium">
+                                Required Experiences
+                            </h4>
+                            <ul className="mt-2 list-disc space-y-1 pl-5">
+                                {active.requiredExperiences.map(
+                                    (experience) => (
+                                        <li key={experience}>{experience}</li>
+                                    ),
+                                )}
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            ) : (
+                <p className="text-sm text-base-content/70">
+                    No JD analyzed yet.
+                </p>
+            )}
         </section>
     );
 }
@@ -280,7 +338,7 @@ function MatchResultPanel({ result }: { result: JdMatchResult }) {
     return (
         <section
             aria-labelledby="match-result-title"
-            className="mt-6 rounded border border-base-300 bg-base-100 p-5"
+            className="border-t border-base-300 p-4 sm:p-6 lg:p-8"
         >
             <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
                 <div>
@@ -304,9 +362,10 @@ function MatchResultPanel({ result }: { result: JdMatchResult }) {
                 <span className="font-medium">Disadvantages:</span>{" "}
                 {result.match.intro.disadvantages}
             </p>
-            <div className="grid gap-6 xl:grid-cols-[340px_minmax(0,1fr)]">
+            <div className="grid gap-6 lg:grid-cols-[360px_minmax(0,1fr)]">
                 <ResumeRadarChart dimensions={result.match.dimensions} />
-                <div className="overflow-x-auto">
+                <MobileMatchDimensions dimensions={result.match.dimensions} />
+                <div className="hidden overflow-x-auto md:block">
                     <table className="table">
                         <thead>
                             <tr>
@@ -333,14 +392,45 @@ function MatchResultPanel({ result }: { result: JdMatchResult }) {
     );
 }
 
+function MobileMatchDimensions({
+    dimensions,
+}: {
+    dimensions: ResumeJdMatch["dimensions"];
+}) {
+    return (
+        <div className="space-y-4 md:hidden">
+            {dimensions.map((dimension) => (
+                <section
+                    aria-label={`${dimension.label} match detail`}
+                    className="border-t border-base-300 pt-4 first:border-t-0 first:pt-0"
+                    key={dimension.dimension}
+                >
+                    <div className="flex items-start justify-between gap-4">
+                        <h3 className="font-medium">{dimension.label}</h3>
+                        <span className="badge badge-outline">
+                            {dimension.percentage}%
+                        </span>
+                    </div>
+                    <p className="mt-1 text-sm text-base-content/70">
+                        Score {dimension.score.toFixed(1)} of 5
+                    </p>
+                    <p className="mt-2 text-sm leading-6">
+                        {dimension.rationale}
+                    </p>
+                </section>
+            ))}
+        </div>
+    );
+}
+
 function ResumeRadarChart({
     dimensions,
 }: {
     dimensions: ResumeJdMatch["dimensions"];
 }) {
-    const size = 300;
+    const size = 360;
     const center = size / 2;
-    const radius = 94;
+    const radius = 104;
     const maxScore = 5;
     const axes = dimensions.map((dimension, index) => {
         const angle = -Math.PI / 2 + (index * Math.PI * 2) / dimensions.length;
@@ -349,7 +439,7 @@ function ResumeRadarChart({
             angle,
             dimension,
             end: radarPoint(center, radius, angle),
-            label: radarPoint(center, radius + 28, angle),
+            label: radarPoint(center, radius + 38, angle),
             value: radarPoint(
                 center,
                 (radius * dimension.score) / maxScore,
@@ -364,7 +454,7 @@ function ResumeRadarChart({
     return (
         <svg
             aria-label="Resume match radar chart"
-            className="h-auto w-full max-w-[340px]"
+            className="mx-auto h-auto w-full max-w-[360px]"
             viewBox={`0 0 ${size} ${size}`}
         >
             {[1, 2, 3, 4, 5].map((level) => {
