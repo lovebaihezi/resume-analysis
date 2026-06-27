@@ -105,9 +105,9 @@ class FixtureAi {
 
     async toMarkdown(file: { name: string }): Promise<unknown> {
         return {
-            data: "Ava Chen resume converted to markdown",
+            data: "Asuka resume converted to markdown",
             format: "markdown",
-            id: "converted-ava-chen",
+            id: "converted-asuka",
             mimeType: "application/pdf",
             name: file.name,
             tokens: 8,
@@ -168,13 +168,13 @@ describe("Cloudflare Durable Object storage behavior", () => {
 
     it("uploads through the Worker API and reaches ready through the queue consumer", async () => {
         const ai = new FixtureAi();
-        const bytes = pdfWithPages(2, "Ava Chen");
+        const bytes = pdfWithPages(2, "Asuka");
         const uploadResponse = await workerExports.default.fetch(
             new Request(`${apiOrigin}/api/resumes/analyze`, {
                 body: bytesToArrayBuffer(bytes),
                 headers: {
                     "content-type": "application/pdf",
-                    "x-file-name": "ava-chen.pdf",
+                    "x-file-name": "asuka.pdf",
                     "x-upload-source": "drag",
                 },
                 method: "POST",
@@ -241,7 +241,7 @@ describe("Cloudflare Durable Object storage behavior", () => {
         );
         expect(parseResumeStatusResult(await readyStatus.json())).toMatchObject(
             {
-                name: "Ava Chen",
+                name: "Asuka",
                 resumeId: upload.resumeId,
                 status: "ready",
             },
@@ -252,8 +252,8 @@ describe("Cloudflare Durable Object storage behavior", () => {
         );
         expect(detailResponse.status).toBe(200);
         const detail = parseResumeInfoResult(await detailResponse.json());
-        expect(detail.resume.basic.name).toBe("Ava Chen");
-        expect(detail.resume.rawText).toContain("Ava Chen");
+        expect(detail.resume.basic.name).toBe("Asuka");
+        expect(detail.resume.rawText).toContain("Asuka");
 
         const listResponse = await workerExports.default.fetch(
             `${apiOrigin}/api/resumes`,
@@ -263,7 +263,7 @@ describe("Cloudflare Durable Object storage behavior", () => {
             count: 1,
             resumes: [
                 expect.objectContaining({
-                    name: "Ava Chen",
+                    name: "Asuka",
                     resumeId: upload.resumeId,
                     status: "ready",
                 }),
@@ -284,7 +284,7 @@ describe("Cloudflare Durable Object storage behavior", () => {
             parseResumeStatusResult(await archivedStatus.json()),
         ).toMatchObject({
             archivedAt: expect.any(String),
-            name: "Ava Chen",
+            name: "Asuka",
             resumeId: upload.resumeId,
             status: "archived",
         });

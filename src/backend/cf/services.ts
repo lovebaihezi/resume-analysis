@@ -689,7 +689,7 @@ function resumeStreamPrompt(
     return `Extract this PDF resume text into flat XML-style field tags for streaming display.
 Return only tags. Do not return JSON, markdown fences, comments, explanations, or binary content.
 Each complete tag must be independent and use the same opening and closing path:
-<basic.name>Ava Chen</basic.name>
+<basic.name>Asuka</basic.name>
 <edu.0.school>National University</edu.0.school>
 <work.0.duration.0>2020-01-01</work.0.duration.0>
 

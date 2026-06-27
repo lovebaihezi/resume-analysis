@@ -2,12 +2,12 @@ import type { JobDescription, ResumeAnalysis } from "../../src/shared/types";
 
 export const sampleResume: ResumeAnalysis = {
     rawText:
-        "Ava Chen\nava@example.com\nSenior frontend engineer with React and Cloudflare Workers experience.",
+        "Asuka\nasuka@example.com\nSenior frontend engineer with React and Cloudflare Workers experience.",
     basic: {
-        name: "Ava Chen",
-        email: "ava@example.com",
+        name: "Asuka",
+        email: "asuka@example.com",
         phone: "+1-555-0100",
-        socialMedia: [{ name: "GitHub", link: "https://github.com/ava" }],
+        socialMedia: [{ name: "GitHub", link: "https://github.com/asuka" }],
     },
     edu: [
         {

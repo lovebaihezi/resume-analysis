@@ -49,7 +49,7 @@ describe("resume analysis UI behavior", () => {
         await resetBackend();
         const user = userEvent.setup();
         renderApp("/");
-        const file = new File([pdfWithPages(1, "Ava Chen")], "ava-chen.pdf", {
+        const file = new File([pdfWithPages(1, "Asuka")], "asuka.pdf", {
             type: "application/pdf",
         });
 
@@ -61,8 +61,8 @@ describe("resume analysis UI behavior", () => {
         await waitFor(() => {
             expect(document.body).toHaveTextContent(/100%/);
         });
-        await expectResumeDetailVisible("Ava Chen");
-        await expectResumeDetailVisibleAfterRefresh("Ava Chen");
+        await expectResumeDetailVisible("Asuka");
+        await expectResumeDetailVisibleAfterRefresh("Asuka");
     });
 
     it("opens the file picker from the whole upload drop zone", async () => {
@@ -92,7 +92,7 @@ describe("resume analysis UI behavior", () => {
         await resetBackend({ mode: "pending" });
         const user = userEvent.setup();
         renderApp("/");
-        const file = new File([pdfWithPages(1, "Ava Chen")], "ava-chen.pdf", {
+        const file = new File([pdfWithPages(1, "Asuka")], "asuka.pdf", {
             type: "application/pdf",
         });
 
@@ -101,7 +101,7 @@ describe("resume analysis UI behavior", () => {
         expect(
             await screen.findByTestId("resume-extraction-skeleton"),
         ).toBeInTheDocument();
-        expect(screen.getByText("ava-chen.pdf")).toBeInTheDocument();
+        expect(screen.getByText("asuka.pdf")).toBeInTheDocument();
         expect(
             screen.getByRole("heading", { name: /extracting resume/i }),
         ).toBeInTheDocument();
@@ -132,7 +132,7 @@ describe("resume analysis UI behavior", () => {
             await screen.findByLabelText("Converting PDF to markdown duration"),
         ).toHaveTextContent(/^(?:\d+ms|\d+\.\d+s)$/);
         const tokenRow = await screen.findByLabelText(
-            "basic.name assigned Ava Chen",
+            "basic.name assigned Asuka",
         );
 
         expect(tokenRow).toBeInTheDocument();
@@ -145,14 +145,14 @@ describe("resume analysis UI behavior", () => {
         const user = userEvent.setup();
         renderApp("/resumes");
 
-        const link = await screen.findByRole("link", { name: "Ava Chen" });
+        const link = await screen.findByRole("link", { name: "Asuka" });
 
         await user.click(link);
         await waitFor(() => {
             expect(window.location.pathname).toMatch(/^\/resumes\/.+/);
         });
-        await expectResumeDetailVisible("Ava Chen");
-        await expectResumeDetailVisibleAfterRefresh("Ava Chen");
+        await expectResumeDetailVisible("Asuka");
+        await expectResumeDetailVisibleAfterRefresh("Asuka");
     });
 
     it("archives a resume from the uploaded resume table", async () => {
@@ -162,12 +162,12 @@ describe("resume analysis UI behavior", () => {
 
         expect(await screen.findByText("1 total")).toBeInTheDocument();
         await user.click(
-            await screen.findByRole("button", { name: /archive ava chen/i }),
+            await screen.findByRole("button", { name: /archive asuka/i }),
         );
 
         await waitFor(() => {
             expect(
-                screen.queryByRole("link", { name: "Ava Chen" }),
+                screen.queryByRole("link", { name: "Asuka" }),
             ).not.toBeInTheDocument();
         });
         await expectNoResumesVisible();
@@ -189,7 +189,7 @@ describe("resume analysis UI behavior", () => {
     it("uploads PDFs from drag and paste interactions", async () => {
         await resetBackend();
         renderApp("/");
-        const file = new File([pdfWithPages(1, "Ava Chen")], "ava-chen.pdf", {
+        const file = new File([pdfWithPages(1, "Asuka")], "asuka.pdf", {
             type: "application/pdf",
         });
         const zone = screen.getByTestId("resume-dropzone");
@@ -201,8 +201,8 @@ describe("resume analysis UI behavior", () => {
         await waitFor(() => {
             expect(window.location.pathname).toMatch(/^\/resumes\/.+/);
         });
-        await expectResumeDetailVisible("Ava Chen");
-        await expectResumeDetailVisibleAfterRefresh("Ava Chen");
+        await expectResumeDetailVisible("Asuka");
+        await expectResumeDetailVisibleAfterRefresh("Asuka");
 
         cleanup();
         window.history.replaceState(null, "", "/");
@@ -222,8 +222,8 @@ describe("resume analysis UI behavior", () => {
         await waitFor(() => {
             expect(window.location.pathname).toMatch(/^\/resumes\/.+/);
         });
-        await expectResumeDetailVisible("Ava Chen");
-        await expectResumeDetailVisibleAfterRefresh("Ava Chen");
+        await expectResumeDetailVisible("Asuka");
+        await expectResumeDetailVisibleAfterRefresh("Asuka");
     });
 
     it("rejects non-PDF files in the upload surface before calling the API", async () => {
@@ -279,7 +279,7 @@ describe("resume analysis UI behavior", () => {
         const resumeSelector =
             await screen.findByLabelText(/uploaded document/i);
         const resumeOption = await screen.findByRole("option", {
-            name: "Ava Chen",
+            name: "Asuka",
         });
 
         await user.selectOptions(resumeSelector, resumeOption);
@@ -394,7 +394,7 @@ async function expectResumeDetailVisibleAfterRefresh(
 async function expectNoResumesVisible(): Promise<void> {
     expect(await screen.findByText("0 total")).toBeInTheDocument();
     expect(screen.getByText("No resumes uploaded.")).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "Ava Chen" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Asuka" })).toBeNull();
 }
 
 function reloadCurrentPage(): void {

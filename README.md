@@ -16,83 +16,73 @@ in Durable Objects, and serving a React UI from Worker static assets.
 ## Project Arch
 
 ```mermaid
-flowchart TB
-    subgraph Frontend["Frontend Layer"]
-        UI["React routes and upload UI"]
-        State["XState app machine"]
-        Client["browserApiClient"]
-    end
+flowchart LR
+    User["User"]
+    Browser["Browser"]
+    Worker["Cloudflare Worker"]
+    ToMarkdown["Cloudflare AI toMarkdown"]
+    DurableObject["Cloudflare DurableObject"]
+    Gemini["Gemini"]
 
-    subgraph API["API Layer - Cloudflare Worker"]
-        Assets["Worker static assets"]
-        Express["Express API app"]
-        StreamAPI["POST /api/resumes/analyze/stream"]
-        AsyncAPI["POST /api/resumes/analyze"]
-        QueueHandler["queue() resume job consumer"]
-        Services["AppServices ports"]
-    end
-
-    subgraph LLM["LLM Interaction Layer"]
-        Markdown["Workers AI toMarkdown PDF conversion"]
-        Gateway["AI Gateway"]
-        Gemini["Google AI Studio Gemini stream"]
-        Kimi["Workers AI Kimi JD JSON extraction"]
-        Parser["ResumeFieldTagParser"]
-    end
-
-    subgraph Storage["Storage Layer"]
-        Queue["Cloudflare Queue resume-analysis-jobs"]
-        RegistryDO["ResumeRegistryObject SQLite"]
-        ResumeDO["ResumeDocumentObject SQLite"]
-        JdDO["JobDescriptionStoreObject SQLite"]
-    end
-
-    UI --> State
-    State --> Client
-    Client --> StreamAPI
-    Client --> AsyncAPI
-    Client --> Express
-    Assets --> UI
-    Express --> StreamAPI
-    Express --> AsyncAPI
-    Express --> Services
-    AsyncAPI --> Queue
-    Queue --> QueueHandler
-    QueueHandler --> Services
-    Services --> Markdown
-    Markdown --> Gateway
-    Gateway --> Gemini
-    Services --> Kimi
-    Gemini --> Parser
-    Parser --> StreamAPI
-    Services --> RegistryDO
-    Services --> ResumeDO
-    Services --> JdDO
+    User -->|"Choose or drag PDF"| Browser
+    Browser -->|"PDF file sent"| Worker
+    Worker -->|"PDF to Markdown"| ToMarkdown
+    ToMarkdown -->|"Markdown resume text"| Gemini
+    Gemini -->|"Stream token: basic.name = Asuka"| Worker
+    Worker -->|"Streaming progress and preview"| Browser
+    Worker -->|"Store extracted text only"| DurableObject
+    DurableObject -->|"Saved resume text"| Worker
+    Worker -->|"Final result"| Browser
+    Browser -->|"Resume analysis view"| User
 ```
 
-The Worker is the public boundary for both the static React application and the
-API. API handlers depend on `AppServices` ports, so the Cloudflare deployment
-uses Durable Objects, Queues, Workers AI, and AI Gateway while local and test
-runtimes can swap in memory-backed implementations.
+The diagram keeps the product flow at the user-facing level: the browser sends a
+PDF to the Worker, Cloudflare AI `toMarkdown` converts it to Markdown, Gemini
+streams field tokens like `basic.name = Asuka` back through the Worker, and
+the Worker stores the extracted resume text in Cloudflare DurableObject storage.
 
 ## Tech Stack Peek Reason
 
-Fill in the Reason column with the wording you want to present.
+Use the blank `Reason` bullets to write the product or engineering opinion.
 
-| Area                 | Tech Stack Peek                                                                                         | Reason |
-| -------------------- | ------------------------------------------------------------------------------------------------------- | ------ |
-| Frontend             | React, React Router v7, XState, SWR, ArkType, Tailwind CSS, daisyUI                                     |        |
-| API                  | Express running inside Cloudflare Workers with `nodejs_compat`                                          |        |
-| Storage              | SQLite-backed Durable Objects for resume registry, resume documents, and JD records                     |        |
-| Async Jobs           | Cloudflare Queues for background resume analysis retries                                                |        |
-| LLM Interaction      | Workers AI `toMarkdown`, AI Gateway, Google AI Studio Gemini streaming, Workers AI Kimi JSON extraction |        |
-| Validation and Tests | ArkType schemas, Vitest integration/browser/Workers tests, Playwright e2e entrypoint, Oxlint, Prettier  |        |
+### Frontend
+
+- Stack: React, React Router v7, XState, SWR, ArkType, Tailwind CSS, daisyUI
+- Reason:
+
+### API
+
+- Stack: Express running inside Cloudflare Workers with `nodejs_compat`
+- Reason:
+
+### Storage
+
+- Stack: SQLite-backed Durable Objects for resume registry, resume documents,
+  and JD records
+- Reason:
+
+### Async Jobs
+
+- Stack: Cloudflare Queues for background resume analysis retries
+- Reason:
+
+### LLM Interaction
+
+- Stack: Workers AI `toMarkdown`, AI Gateway, Google AI Studio Gemini streaming,
+  custom stream-token parsing algorithm
+- Reason:
+
+### Validation and Tests
+
+- Stack: ArkType schemas, Vitest integration/browser/Workers tests, Playwright
+  e2e entrypoint, Oxlint, Prettier
+- Reason:
 
 ## Streaming Resume Shape
 
 Resume extraction does not ask the model to stream one giant JSON object. The
 prompt asks Gemini to emit independent XML-style field tags such as
-`<basic.name>Ava Chen</basic.name>` and
+`<basic.name>Asuka</basic.name>` and
 `<project.0.name>Resume Analyzer</project.0.name>`. Each tag is a flat field
 path plus a value.
 
