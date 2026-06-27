@@ -10,7 +10,8 @@ type ResumesPageProps = {
 };
 
 const RESUME_ROW_HEIGHT = 84;
-const RESUME_LIST_MAX_HEIGHT = 560;
+const RESUME_LIST_FALLBACK_HEIGHT = 560;
+const RESUME_LIST_BOTTOM_GUTTER = 32;
 const RESUME_LIST_OVERSCAN = 6;
 const RESUME_TABLE_COLUMNS =
     "minmax(14rem, 1.25fr) minmax(10rem, 0.85fr) minmax(10rem, 0.85fr) minmax(18rem, 1.45fr) 3.5rem";
@@ -22,7 +23,9 @@ export function ResumesPage({ apiClient }: ResumesPageProps) {
     );
     const [searchQuery, setSearchQuery] = useState("");
     const [scrollTop, setScrollTop] = useState(0);
-    const [viewportHeight, setViewportHeight] = useState(0);
+    const [availableListHeight, setAvailableListHeight] = useState(
+        RESUME_LIST_FALLBACK_HEIGHT,
+    );
     const virtualListRef = useRef<HTMLTableSectionElement | null>(null);
     const { data, isLoading, mutate } = useSWR("resumes.table", () =>
         apiClient.listResumes(),
@@ -42,14 +45,12 @@ export function ResumesPage({ apiClient }: ResumesPageProps) {
                 itemHeight: RESUME_ROW_HEIGHT,
                 overscan: RESUME_LIST_OVERSCAN,
                 scrollTop,
-                viewportHeight:
-                    viewportHeight ||
-                    Math.min(
-                        filteredResumes.length * RESUME_ROW_HEIGHT,
-                        RESUME_LIST_MAX_HEIGHT,
-                    ),
+                viewportHeight: Math.min(
+                    filteredResumes.length * RESUME_ROW_HEIGHT,
+                    availableListHeight,
+                ),
             }),
-        [filteredResumes.length, scrollTop, viewportHeight],
+        [availableListHeight, filteredResumes.length, scrollTop],
     );
     const visibleResumes = filteredResumes.slice(
         visibleRange.startIndex,
@@ -58,7 +59,7 @@ export function ResumesPage({ apiClient }: ResumesPageProps) {
     const totalTableHeight = filteredResumes.length * RESUME_ROW_HEIGHT;
     const virtualListHeight =
         filteredResumes.length > 0
-            ? Math.min(totalTableHeight, RESUME_LIST_MAX_HEIGHT)
+            ? Math.min(totalTableHeight, availableListHeight)
             : undefined;
     const searchIsActive = searchTokens.length > 0;
     const resultCountText = searchIsActive
@@ -66,32 +67,62 @@ export function ResumesPage({ apiClient }: ResumesPageProps) {
         : `${data?.count ?? 0} total`;
 
     useEffect(() => {
-        const element = virtualListRef.current;
+        const currentListElement = virtualListRef.current;
 
-        if (!element) {
+        if (!currentListElement) {
             return;
         }
 
-        function updateViewportHeight(): void {
-            setViewportHeight(element?.clientHeight ?? 0);
+        const listElement: HTMLTableSectionElement = currentListElement;
+        let animationFrameId = 0;
+
+        function updateAvailableListHeight(): void {
+            if (animationFrameId) {
+                window.cancelAnimationFrame(animationFrameId);
+            }
+
+            animationFrameId = window.requestAnimationFrame(() => {
+                const viewportHeight =
+                    window.innerHeight || document.documentElement.clientHeight;
+                const listTop = listElement.getBoundingClientRect().top;
+                const nextAvailableHeight = Math.max(
+                    RESUME_ROW_HEIGHT,
+                    Math.floor(
+                        viewportHeight - listTop - RESUME_LIST_BOTTOM_GUTTER,
+                    ),
+                );
+
+                setAvailableListHeight(nextAvailableHeight);
+                animationFrameId = 0;
+            });
         }
 
-        updateViewportHeight();
+        updateAvailableListHeight();
+        window.addEventListener("resize", updateAvailableListHeight);
 
-        if (typeof ResizeObserver === "undefined") {
-            window.addEventListener("resize", updateViewportHeight);
+        if (typeof ResizeObserver !== "undefined") {
+            const resizeObserver = new ResizeObserver(
+                updateAvailableListHeight,
+            );
+
+            resizeObserver.observe(listElement);
 
             return () => {
-                window.removeEventListener("resize", updateViewportHeight);
+                if (animationFrameId) {
+                    window.cancelAnimationFrame(animationFrameId);
+                }
+
+                window.removeEventListener("resize", updateAvailableListHeight);
+                resizeObserver.disconnect();
             };
         }
 
-        const resizeObserver = new ResizeObserver(updateViewportHeight);
-
-        resizeObserver.observe(element);
-
         return () => {
-            resizeObserver.disconnect();
+            if (animationFrameId) {
+                window.cancelAnimationFrame(animationFrameId);
+            }
+
+            window.removeEventListener("resize", updateAvailableListHeight);
         };
     }, [filteredResumes.length]);
 
@@ -123,7 +154,7 @@ export function ResumesPage({ apiClient }: ResumesPageProps) {
     }
 
     return (
-        <section className="mx-auto max-w-6xl px-4 py-8">
+        <section className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-6xl flex-col px-4 py-8">
             <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
                 <div>
                     <h1 className="text-2xl font-semibold">Uploaded Resumes</h1>
@@ -148,7 +179,7 @@ export function ResumesPage({ apiClient }: ResumesPageProps) {
                     />
                 </label>
             </div>
-            <div className="overflow-x-auto rounded border border-base-300 bg-base-100">
+            <div className="min-h-0 overflow-x-auto rounded border border-base-300 bg-base-100">
                 <table
                     aria-label="Uploaded resumes"
                     aria-rowcount={filteredResumes.length + 1}
@@ -265,7 +296,7 @@ function ResumeRow({
     return (
         <tr
             aria-rowindex={itemIndex + 2}
-            className="absolute left-0 right-0 grid w-full items-center border-t border-base-300 bg-base-100 text-sm"
+            className="absolute left-0 right-0 top-0 grid w-full items-center border-t border-base-300 bg-base-100 text-sm"
             style={{
                 gridTemplateColumns: RESUME_TABLE_COLUMNS,
                 height: RESUME_ROW_HEIGHT,
@@ -341,8 +372,12 @@ function getVirtualRange({
         return { endIndex: 0, startIndex: 0 };
     }
 
-    const visibleStart = Math.floor(scrollTop / itemHeight);
-    const visibleCount = Math.ceil(viewportHeight / itemHeight);
+    const visibleCount = Math.max(1, Math.ceil(viewportHeight / itemHeight));
+    const maxVisibleStart = Math.max(0, itemCount - visibleCount);
+    const visibleStart = Math.min(
+        Math.floor(scrollTop / itemHeight),
+        maxVisibleStart,
+    );
     const startIndex = Math.max(0, visibleStart - overscan);
     const endIndex = Math.min(
         itemCount,
