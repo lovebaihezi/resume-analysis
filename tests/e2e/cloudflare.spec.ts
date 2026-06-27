@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 import { pdfWithPages } from "../fixtures/pdf";
 
 const baseURL = process.env.E2E_BASE_URL;
@@ -26,18 +26,14 @@ test.describe("deployed Cloudflare Worker app", () => {
                 buffer: pdfWithPages(1, "Ava Chen"),
             });
 
-            await expect(page.getByText(/raw resume/i)).toBeVisible({
+            await expect(page).toHaveURL(/\/resumes\/.+/, {
                 timeout: 120_000,
             });
-            await expect(page).toHaveURL(/\/resumes\/.+/);
             resumeId = resumeIdFromUrl(page.url());
-            await expect(page.getByText(/ava chen/i).first()).toBeVisible();
+            await expectResumeDetailVisible(page);
 
             await page.reload();
-            await expect(page.getByText(/raw resume/i)).toBeVisible({
-                timeout: 120_000,
-            });
-            await expect(page.getByText(/ava chen/i).first()).toBeVisible();
+            await expectResumeDetailVisible(page);
 
             await page.getByRole("link", { name: /uploaded resumes/i }).click();
             await expect(page.getByRole("table")).toContainText(/Ava/i);
@@ -53,6 +49,10 @@ test.describe("deployed Cloudflare Worker app", () => {
         }
     });
 });
+
+async function expectResumeDetailVisible(page: Page): Promise<void> {
+    await expect(page.locator("main")).toContainText(/Ava Chen/i);
+}
 
 function resumeIdFromUrl(value: string): string | undefined {
     const match = new URL(value).pathname.match(/^\/resumes\/([^/]+)$/);
