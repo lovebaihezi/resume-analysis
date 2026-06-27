@@ -5,6 +5,7 @@ import type { ResumeStreamPhase } from "../shared/resumeStream";
 export type ExtractionStatusMessage = {
     message: string;
     phase: ResumeStreamPhase;
+    receivedAt: number;
 };
 
 export type ExtractionToken = {
@@ -106,6 +107,7 @@ export const appMachine = setup({
                         {
                             message: event.message,
                             phase: event.phase,
+                            receivedAt: Date.now(),
                         },
                     ].slice(-8),
                 },
