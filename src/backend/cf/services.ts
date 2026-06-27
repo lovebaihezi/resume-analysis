@@ -37,9 +37,8 @@ import type {
     ResumeRegistryObject,
 } from "./durableObjects";
 
-const JD_EXTRACTION_MODEL = "@cf/moonshotai/kimi-k2.6";
 const DEFAULT_AI_GATEWAY_NAME = "collects-auto-ai";
-const DEFAULT_GEMINI_RESUME_MODEL = "gemini-3.5-flash";
+const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash";
 const GOOGLE_AI_STUDIO_PROVIDER = "google-ai-studio";
 const MAX_RESUME_MARKDOWN_CHARS = 3_500;
 const JD_EXTRACTION_MAX_TOKENS = 2048;
@@ -73,7 +72,7 @@ export function createCloudflareServices(env: CloudflareEnv): AppServices {
         ai: new WorkersAiExtractor(
             env.AI,
             env.AI_GATEWAY_NAME ?? DEFAULT_AI_GATEWAY_NAME,
-            env.GEMINI_MODEL ?? DEFAULT_GEMINI_RESUME_MODEL,
+            env.GEMINI_MODEL ?? DEFAULT_GEMINI_MODEL,
         ),
         jdStore: new DurableObjectJdStore(env.JD_STORE),
         resumeAnalysisQueue: new CloudflareResumeAnalysisQueue(
@@ -267,7 +266,7 @@ class WorkersAiExtractor implements AiExtractor {
     constructor(
         private readonly ai: Ai,
         private readonly gatewayId?: string,
-        private readonly geminiResumeModel = DEFAULT_GEMINI_RESUME_MODEL,
+        private readonly geminiModel = DEFAULT_GEMINI_MODEL,
     ) {}
 
     async extractResume(input: ResumeExtractionInput): Promise<ResumeAnalysis> {
@@ -297,8 +296,7 @@ class WorkersAiExtractor implements AiExtractor {
     }
 
     async analyzeJobDescription(rawText: string): Promise<JobDescription> {
-        const response = await this.runJsonPrompt(
-            JD_EXTRACTION_MODEL,
+        const response = await this.runGeminiJsonPrompt(
             "job-description",
             jdPrompt(rawText),
         );
@@ -310,8 +308,7 @@ class WorkersAiExtractor implements AiExtractor {
         jd: JobDescription,
         resume: ResumeDocument,
     ): Promise<ResumeJdMatch> {
-        const response = await this.runJsonPrompt(
-            JD_EXTRACTION_MODEL,
+        const response = await this.runGeminiJsonPrompt(
             "resume-match",
             jdMatchPrompt(jd, resume),
         );
@@ -319,73 +316,122 @@ class WorkersAiExtractor implements AiExtractor {
         return normalizeResumeJdMatch(response, resume);
     }
 
-    private async runJsonPrompt(
-        model: string,
+    private async runGeminiJsonPrompt(
         task: "job-description" | "resume-match",
         content: string,
     ): Promise<unknown> {
+        if (!this.gatewayId) {
+            throw new Error("AI Gateway name is required for Gemini analysis");
+        }
+
         const startedAt = Date.now();
         const maxTokens =
             task === "resume-match"
                 ? JD_MATCH_MAX_TOKENS
                 : JD_EXTRACTION_MAX_TOKENS;
-        let response: unknown;
+        const endpoint = `v1beta/models/${this.geminiModel}:generateContent`;
+        let response: Response;
+        let payload: unknown;
 
         console.info("resume-ai", {
-            event: "model:start",
+            endpoint,
+            event: "gateway:model:start",
+            gatewayId: this.gatewayId,
             maxTokens,
-            model,
+            model: this.geminiModel,
             promptChars: content.length,
+            provider: GOOGLE_AI_STUDIO_PROVIDER,
             task,
         });
 
         try {
-            response = await this.ai.run(
-                model,
+            response = await this.ai.gateway(this.gatewayId).run(
                 {
-                    chat_template_kwargs: {
-                        clear_thinking: true,
-                        enable_thinking: false,
+                    endpoint,
+                    headers: {
+                        "Content-Type": "application/json",
                     },
-                    max_completion_tokens: maxTokens,
-                    max_tokens: maxTokens,
-                    messages: [
-                        {
-                            content:
-                                "You analyze hiring documents and return only valid JSON. Do not include reasoning, explanations, or markdown.",
-                            role: "system",
+                    provider: GOOGLE_AI_STUDIO_PROVIDER,
+                    query: {
+                        contents: [
+                            {
+                                parts: [
+                                    {
+                                        text: `You analyze hiring documents and return only valid JSON. Do not include reasoning, explanations, or markdown.\n\n${content}`,
+                                    },
+                                ],
+                                role: "user",
+                            },
+                        ],
+                        generationConfig: {
+                            maxOutputTokens: maxTokens,
+                            responseMimeType: "application/json",
+                            temperature: 0,
                         },
-                        {
-                            content,
-                            role: "user",
-                        },
-                    ],
-                    response_format: {
-                        type: "json_object",
                     },
-                    reasoning_effort: "low",
-                    temperature: 0,
                 },
-                this.gatewayId
-                    ? {
-                          gateway: {
-                              cacheTtl: 3600,
-                              id: this.gatewayId,
-                              skipCache: false,
-                          },
-                      }
-                    : undefined,
+                {
+                    gateway: {
+                        cacheTtl: 3600,
+                        collectLog: true,
+                        id: this.gatewayId,
+                        skipCache: false,
+                    },
+                },
             );
         } catch (error) {
             console.error("resume-ai", {
                 durationMs: elapsed(startedAt),
+                endpoint,
                 error: errorMessage(error),
-                event: "model:failed",
-                model,
+                event: "gateway:model:failed",
+                gatewayId: this.gatewayId,
+                model: this.geminiModel,
+                provider: GOOGLE_AI_STUDIO_PROVIDER,
                 task,
             });
             throw new Error(
-                `${model} extraction failed: ${errorMessage(error)}`,
+                `${this.geminiModel} ${task} failed: ${errorMessage(error)}`,
+                {
+                    cause: error,
+                },
+            );
+        }
+
+        if (!response.ok) {
+            const responseText = await response.text();
+
+            console.error("resume-ai", {
+                durationMs: elapsed(startedAt),
+                endpoint,
+                event: "gateway:model:http-failed",
+                gatewayId: this.gatewayId,
+                model: this.geminiModel,
+                provider: GOOGLE_AI_STUDIO_PROVIDER,
+                responseStatus: response.status,
+                responseText: previewText(responseText),
+                task,
+            });
+            throw new Error(
+                `${this.geminiModel} ${task} failed with HTTP ${response.status}: ${previewText(responseText)}`,
+            );
+        }
+
+        try {
+            payload = await response.json();
+        } catch (error) {
+            console.error("resume-ai", {
+                durationMs: elapsed(startedAt),
+                endpoint,
+                error: errorMessage(error),
+                event: "gateway:model:invalid-response",
+                gatewayId: this.gatewayId,
+                model: this.geminiModel,
+                provider: GOOGLE_AI_STUDIO_PROVIDER,
+                task,
+            });
+            throw new Error(
+                `${this.geminiModel} ${task} returned an invalid response: ${errorMessage(error)}`,
                 {
                     cause: error,
                 },
@@ -394,29 +440,35 @@ class WorkersAiExtractor implements AiExtractor {
 
         console.info("resume-ai", {
             durationMs: elapsed(startedAt),
-            event: "model:complete",
-            model,
-            response: describeAiResponse(response),
+            endpoint,
+            event: "gateway:model:complete",
+            gatewayId: this.gatewayId,
+            model: this.geminiModel,
+            provider: GOOGLE_AI_STUDIO_PROVIDER,
+            response: describeAiResponse(payload),
             task,
         });
 
         try {
-            return parseAiJson(response);
+            return parseAiJson(payload);
         } catch (error) {
-            const text = readAiText(response);
+            const text = readAiText(payload);
 
             console.error("resume-ai", {
                 durationMs: elapsed(startedAt),
+                endpoint,
                 error: errorMessage(error),
-                event: "model:parse-failed",
-                model,
-                response: describeAiResponse(response),
+                event: "gateway:model:parse-failed",
+                gatewayId: this.gatewayId,
+                model: this.geminiModel,
+                provider: GOOGLE_AI_STUDIO_PROVIDER,
+                response: describeAiResponse(payload),
                 task,
                 textChars: text.length,
                 textPreview: previewText(text),
             });
             throw new Error(
-                `${model} returned invalid JSON: ${errorMessage(error)}`,
+                `${this.geminiModel} returned invalid JSON: ${errorMessage(error)}`,
                 {
                     cause: error,
                 },
@@ -435,7 +487,7 @@ class WorkersAiExtractor implements AiExtractor {
         }
 
         const startedAt = Date.now();
-        const endpoint = `v1beta/models/${this.geminiResumeModel}:streamGenerateContent?alt=sse`;
+        const endpoint = `v1beta/models/${this.geminiModel}:streamGenerateContent?alt=sse`;
         const parser = new ResumeFieldTagParser();
         const tokens: ResumeFieldToken[] = [];
         let chunkCount = 0;
@@ -447,7 +499,7 @@ class WorkersAiExtractor implements AiExtractor {
             event: "gateway:model:stream:start",
             gatewayId: this.gatewayId,
             maxOutputTokens: GEMINI_RESUME_MAX_OUTPUT_TOKENS,
-            model: this.geminiResumeModel,
+            model: this.geminiModel,
             promptChars: content.length,
             provider: GOOGLE_AI_STUDIO_PROVIDER,
             task: "resume",
@@ -490,12 +542,12 @@ class WorkersAiExtractor implements AiExtractor {
                 error: errorMessage(error),
                 event: "gateway:model:stream:failed",
                 gatewayId: this.gatewayId,
-                model: this.geminiResumeModel,
+                model: this.geminiModel,
                 provider: GOOGLE_AI_STUDIO_PROVIDER,
                 task: "resume",
             });
             throw new Error(
-                `${this.geminiResumeModel} stream extraction failed: ${errorMessage(error)}`,
+                `${this.geminiModel} stream extraction failed: ${errorMessage(error)}`,
                 { cause: error },
             );
         }
@@ -504,7 +556,7 @@ class WorkersAiExtractor implements AiExtractor {
             const responseText = await response.text();
 
             throw new Error(
-                `${this.geminiResumeModel} stream extraction failed with HTTP ${response.status}: ${previewText(responseText)}`,
+                `${this.geminiModel} stream extraction failed with HTTP ${response.status}: ${previewText(responseText)}`,
             );
         }
 
@@ -527,20 +579,20 @@ class WorkersAiExtractor implements AiExtractor {
                 error: errorMessage(error),
                 event: "gateway:model:stream:parse-failed",
                 gatewayId: this.gatewayId,
-                model: this.geminiResumeModel,
+                model: this.geminiModel,
                 provider: GOOGLE_AI_STUDIO_PROVIDER,
                 task: "resume",
                 tokenCount,
             });
             throw new Error(
-                `${this.geminiResumeModel} returned an invalid resume stream: ${errorMessage(error)}`,
+                `${this.geminiModel} returned an invalid resume stream: ${errorMessage(error)}`,
                 { cause: error },
             );
         }
 
         if (tokens.length === 0) {
             throw new Error(
-                `${this.geminiResumeModel} returned no complete resume field tags`,
+                `${this.geminiModel} returned no complete resume field tags`,
             );
         }
 
@@ -550,7 +602,7 @@ class WorkersAiExtractor implements AiExtractor {
             endpoint,
             event: "gateway:model:stream:complete",
             gatewayId: this.gatewayId,
-            model: this.geminiResumeModel,
+            model: this.geminiModel,
             provider: GOOGLE_AI_STUDIO_PROVIDER,
             task: "resume",
             tokenCount,
@@ -729,6 +781,12 @@ function readAiText(response: unknown, depth = 0): string {
 
     if (!record) {
         return "";
+    }
+
+    const geminiText = readGeminiText(record);
+
+    if (geminiText) {
+        return geminiText;
     }
 
     const directResponse = readString(record.response);
@@ -942,13 +1000,18 @@ function describeAiResponse(response: unknown): Record<string, unknown> {
 
     const record = response as Record<string, unknown>;
     const choices = Array.isArray(record.choices) ? record.choices : [];
+    const candidates = Array.isArray(record.candidates)
+        ? record.candidates
+        : [];
     const firstChoice = asRecord(choices[0]);
     const firstMessage = asRecord(firstChoice?.message);
     const firstMessageContent = firstMessage?.content;
     const firstMessageReasoning = asRecord(firstMessage?.reasoning);
+    const geminiText = readGeminiText(record);
     const result = asRecord(record.result);
 
     return {
+        candidateCount: candidates.length,
         choiceCount: choices.length,
         contentArrayLength: Array.isArray(firstMessageContent)
             ? firstMessageContent.length
@@ -961,6 +1024,7 @@ function describeAiResponse(response: unknown): Record<string, unknown> {
                   ? "array"
                   : typeof firstMessageContent,
         finishReason: firstChoice?.finish_reason,
+        geminiTextChars: stringLength(geminiText),
         keys: Object.keys(record).slice(0, 12),
         messageKeys: firstMessage
             ? Object.keys(firstMessage).slice(0, 12)
