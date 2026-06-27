@@ -10,6 +10,7 @@ export type ExtractionStatusMessage = {
 
 export type ExtractionToken = {
     path: string;
+    receivedAt: number;
     value: string;
 };
 
@@ -126,6 +127,7 @@ export const appMachine = setup({
                         ...context.extraction.tokens,
                         {
                             path: event.path,
+                            receivedAt: Date.now(),
                             value: event.value,
                         },
                     ].slice(-40),

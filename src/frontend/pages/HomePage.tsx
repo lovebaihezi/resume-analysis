@@ -1,3 +1,4 @@
+import { CheckCircleIcon } from "@phosphor-icons/react";
 import { siGoogledocs } from "simple-icons";
 import katex from "katex";
 import "katex/dist/katex.min.css";
@@ -24,6 +25,8 @@ export function HomePage({ apiClient }: HomePageProps) {
         upload.status !== "idle" &&
         upload.status !== "error" &&
         upload.status !== "done";
+    const showUploadedPdfPreview =
+        Boolean(previewUrl) && upload.status === "analyzing";
     const showProgressBar = upload.status === "uploading";
     const latestStreamMessage =
         state.context.extraction.messages.at(-1)?.message;
@@ -146,66 +149,68 @@ export function HomePage({ apiClient }: HomePageProps) {
                 }}
                 type="file"
             />
-            <button
-                aria-label="Resume PDF upload area"
-                className={
-                    hasSelectedFile
-                        ? "pdf-preview card mx-auto w-full max-w-2xl cursor-pointer border-2 border-dashed border-info bg-base-100 shadow-2xl transition focus:outline-none focus:ring-2 focus:ring-info focus:ring-offset-2 focus:ring-offset-base-200 lg:justify-self-center"
-                        : "pdf-preview card w-full max-w-3xl cursor-pointer border-2 border-dashed border-info bg-base-100 shadow-2xl transition focus:outline-none focus:ring-2 focus:ring-info focus:ring-offset-2 focus:ring-offset-base-200"
-                }
-                data-testid="resume-dropzone"
-                onClick={openFilePicker}
-                onDragOver={(event) => event.preventDefault()}
-                onDrop={(event) => {
-                    event.preventDefault();
-                    const file = firstFile(event.dataTransfer.files);
-
-                    if (file) {
-                        void handleFile(file, "drag");
+            {showUploadedPdfPreview && previewUrl ? (
+                <PdfPreviewPanel previewUrl={previewUrl} />
+            ) : (
+                <button
+                    aria-label="Resume PDF upload area"
+                    className={
+                        hasSelectedFile
+                            ? "pdf-preview card mx-auto w-full max-w-2xl cursor-pointer border-2 border-dashed border-info bg-base-100 shadow-2xl transition focus:outline-none focus:ring-2 focus:ring-info focus:ring-offset-2 focus:ring-offset-base-200 lg:justify-self-center"
+                            : "pdf-preview card w-full max-w-3xl cursor-pointer border-2 border-dashed border-info bg-base-100 shadow-2xl transition focus:outline-none focus:ring-2 focus:ring-info focus:ring-offset-2 focus:ring-offset-base-200"
                     }
-                }}
-                type="button"
-            >
-                <div className="card-body items-center gap-6 text-center">
-                    {previewUrl ? (
-                        <object
-                            aria-label="First page PDF preview"
-                            className="h-72 w-full rounded border border-base-300 bg-base-200"
-                            data={previewUrl}
-                            type="application/pdf"
-                        />
-                    ) : (
-                        <SimpleIcon
-                            className="h-14 w-14 text-info"
-                            icon={siGoogledocs}
-                        />
-                    )}
-                    <p className="text-sm text-base-content/70">
-                        Click, drag, or paste a PDF resume.
-                    </p>
-                    {showProgressBar || progressText ? (
-                        <div className="w-full max-w-md">
-                            {showProgressBar ? (
-                                <progress
-                                    className="progress progress-info w-full"
-                                    max={100}
-                                    value={upload.percent}
-                                />
-                            ) : null}
-                            {progressText ? (
-                                <div className="mt-2 text-sm text-base-content/70">
-                                    {progressText}
-                                </div>
-                            ) : null}
-                        </div>
-                    ) : null}
-                    {state.context.error ? (
-                        <div className="alert alert-error max-w-md">
-                            <span>{state.context.error}</span>
-                        </div>
-                    ) : null}
-                </div>
-            </button>
+                    data-testid="resume-dropzone"
+                    onClick={openFilePicker}
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={(event) => {
+                        event.preventDefault();
+                        const file = firstFile(event.dataTransfer.files);
+
+                        if (file) {
+                            void handleFile(file, "drag");
+                        }
+                    }}
+                    type="button"
+                >
+                    <div className="card-body items-center gap-6 text-center">
+                        {previewUrl ? (
+                            <PdfPreviewObject
+                                className="h-72"
+                                previewUrl={previewUrl}
+                            />
+                        ) : (
+                            <SimpleIcon
+                                className="h-14 w-14 text-info"
+                                icon={siGoogledocs}
+                            />
+                        )}
+                        <p className="text-sm text-base-content/70">
+                            Click, drag, or paste a PDF resume.
+                        </p>
+                        {showProgressBar || progressText ? (
+                            <div className="w-full max-w-md">
+                                {showProgressBar ? (
+                                    <progress
+                                        className="progress progress-info w-full"
+                                        max={100}
+                                        value={upload.percent}
+                                    />
+                                ) : null}
+                                {progressText ? (
+                                    <div className="mt-2 text-sm text-base-content/70">
+                                        {progressText}
+                                    </div>
+                                ) : null}
+                            </div>
+                        ) : null}
+                        {state.context.error ? (
+                            <div className="alert alert-error max-w-md">
+                                <span>{state.context.error}</span>
+                            </div>
+                        ) : null}
+                    </div>
+                </button>
+            )}
             {showExtractionPreview ? (
                 <ExtractionStreamPreview
                     fileName={upload.fileName ?? "resume.pdf"}
@@ -215,6 +220,34 @@ export function HomePage({ apiClient }: HomePageProps) {
                 />
             ) : null}
         </section>
+    );
+}
+
+function PdfPreviewPanel({ previewUrl }: { previewUrl: string }) {
+    return (
+        <section
+            aria-label="Uploaded PDF preview"
+            className="pdf-preview mx-auto w-full max-w-2xl rounded border border-base-300 bg-base-100 p-4 shadow-xl lg:justify-self-center"
+        >
+            <PdfPreviewObject className="h-[32rem]" previewUrl={previewUrl} />
+        </section>
+    );
+}
+
+function PdfPreviewObject({
+    className,
+    previewUrl,
+}: {
+    className: string;
+    previewUrl: string;
+}) {
+    return (
+        <object
+            aria-label="First page PDF preview"
+            className={`${className} w-full rounded border border-base-300 bg-base-200`}
+            data={previewUrl}
+            type="application/pdf"
+        />
     );
 }
 
@@ -255,27 +288,46 @@ function ExtractionStreamPreview({
                 </p>
                 <div className="mt-5 grid gap-3 sm:grid-cols-2">
                     {messages.length > 0 ? (
-                        messages.map((message, index) => (
-                            <div
-                                className="flex items-center justify-between gap-3 rounded border border-base-300 bg-base-200/60 px-3 py-2 text-sm"
-                                key={`${message.phase}-${index}`}
-                            >
-                                <span className="flex min-w-0 items-center gap-3">
-                                    <span className="loading loading-spinner loading-xs shrink-0 text-info" />
-                                    <span className="truncate">
-                                        {message.message}
-                                    </span>
-                                </span>
-                                <span
-                                    aria-label={`${message.message} duration`}
-                                    className="badge badge-outline whitespace-nowrap font-mono text-[0.7rem]"
+                        messages.map((message, index) => {
+                            const isComplete = index < messages.length - 1;
+
+                            return (
+                                <div
+                                    className="flex items-center justify-between gap-3 rounded border border-base-300 bg-base-200/60 px-3 py-2 text-sm"
+                                    key={`${message.phase}-${message.receivedAt}-${message.message}`}
                                 >
-                                    {formatDuration(
-                                        statusDurationMs(messages, index, now),
-                                    )}
-                                </span>
-                            </div>
-                        ))
+                                    <span className="flex min-w-0 items-center gap-3">
+                                        {isComplete ? (
+                                            <CheckCircleIcon
+                                                aria-label={`${message.message} complete`}
+                                                className="h-4 w-4 shrink-0 text-success"
+                                                weight="fill"
+                                            />
+                                        ) : (
+                                            <span
+                                                aria-label={`${message.message} in progress`}
+                                                className="loading loading-spinner loading-xs shrink-0 text-info"
+                                            />
+                                        )}
+                                        <span className="truncate">
+                                            {message.message}
+                                        </span>
+                                    </span>
+                                    <span
+                                        aria-label={`${message.message} duration`}
+                                        className="badge badge-outline whitespace-nowrap font-mono text-[0.7rem]"
+                                    >
+                                        {formatDuration(
+                                            statusDurationMs(
+                                                messages,
+                                                index,
+                                                now,
+                                            ),
+                                        )}
+                                    </span>
+                                </div>
+                            );
+                        })
                     ) : (
                         <div className="space-y-2 sm:col-span-2">
                             <div className="skeleton h-4 w-2/3" />
@@ -286,11 +338,11 @@ function ExtractionStreamPreview({
                 <div className="mt-5 max-h-80 overflow-y-auto rounded border border-base-300 bg-base-200/60">
                     {tokens.length > 0 ? (
                         <ul className="divide-y divide-base-300">
-                            {tokens.map((token, index) => (
+                            {tokens.map((token) => (
                                 <li
                                     aria-label={`${token.path} assigned ${token.value}`}
                                     className="min-w-0 px-3 py-2 text-sm leading-5 break-words text-base-content/80"
-                                    key={`${token.path}-${index}`}
+                                    key={`${token.path}-${token.receivedAt}-${token.value}`}
                                 >
                                     <RenderedLatexAssignment token={token} />
                                 </li>
