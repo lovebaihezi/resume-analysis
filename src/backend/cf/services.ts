@@ -570,6 +570,8 @@ class WorkersAiExtractor implements AiExtractor {
         });
 
         try {
+            // TODO(markdown-stream): If toMarkdown exposes streaming output later,
+            // forward converted PDF text chunks into resume extraction as they arrive.
             result = await this.ai.toMarkdown(
                 {
                     blob: new Blob([bytesToArrayBuffer(input.bytes)], {
