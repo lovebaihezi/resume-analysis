@@ -96,7 +96,7 @@ async function createBackend(options: BackendOptions): Promise<TestBackend> {
     if (options.seedResume) {
         const upload = await services.resumeStore.createPendingUpload({
             bytes: new Uint8Array(),
-            fileName: "ava-chen.pdf",
+            fileName: "asuka.pdf",
             source: "click",
         });
 

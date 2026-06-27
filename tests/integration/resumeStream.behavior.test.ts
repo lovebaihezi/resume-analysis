@@ -12,14 +12,14 @@ import type { ResumeAnalysis } from "../../src/shared/types";
 
 const fullResume: ResumeAnalysis = {
     rawText:
-        "Ava Chen builds AI resume workflows with React, XState, and Cloudflare Workers.",
+        "Asuka builds AI resume workflows with React, XState, and Cloudflare Workers.",
     basic: {
-        email: "ava@example.com",
-        name: "Ava Chen",
+        email: "asuka@example.com",
+        name: "Asuka",
         phone: "+1-555-0100",
         socialMedia: [
-            { link: "https://github.com/ava", name: "GitHub" },
-            { link: "https://linkedin.com/in/ava", name: "LinkedIn" },
+            { link: "https://github.com/asuka", name: "GitHub" },
+            { link: "https://linkedin.com/in/asuka", name: "LinkedIn" },
         ],
     },
     edu: [
@@ -165,9 +165,9 @@ describe("streamed resume XML token parsing", () => {
         const parser = new ResumeFieldTagParser();
 
         expect(parser.push("<basic.na")).toEqual([]);
-        expect(parser.push("me>Ava")).toEqual([]);
-        expect(parser.push(" Chen</basic.name><skills.0")).toEqual([
-            createResumeFieldToken("basic.name", "Ava Chen"),
+        expect(parser.push("me>As")).toEqual([]);
+        expect(parser.push("uka</basic.name><skills.0")).toEqual([
+            createResumeFieldToken("basic.name", "Asuka"),
         ]);
         expect(parser.push(".name>React</skills.0.name>")).toEqual([
             createResumeFieldToken("skills.0.name", "React"),

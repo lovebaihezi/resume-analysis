@@ -28,9 +28,9 @@ describe("resume and JD API behavior", () => {
         const response = await request(app)
             .post("/api/resumes/analyze")
             .set("content-type", "application/pdf")
-            .set("x-file-name", "ava-chen.pdf")
+            .set("x-file-name", "asuka.pdf")
             .set("x-upload-source", "drag")
-            .send(pdfWithPages(1, "Ava Chen resume"));
+            .send(pdfWithPages(1, "Asuka resume"));
 
         expect(response.status).toBe(202);
         const upload = parseResumeUploadResult(response.body);
@@ -103,9 +103,9 @@ describe("resume and JD API behavior", () => {
             .post("/api/resumes/analyze/stream")
             .set("accept", "text/event-stream")
             .set("content-type", "application/pdf")
-            .set("x-file-name", "ava-chen.pdf")
+            .set("x-file-name", "asuka.pdf")
             .set("x-upload-source", "click")
-            .send(pdfWithPages(1, "Ava Chen resume"));
+            .send(pdfWithPages(1, "Asuka resume"));
 
         expect(response.status).toBe(200);
         expect(response.headers["content-type"]).toContain("text/event-stream");
@@ -128,7 +128,7 @@ describe("resume and JD API behavior", () => {
                     event.type === "token" && event.path === "basic.name",
             ),
         ).toMatchObject({
-            value: "Ava Chen",
+            value: "Asuka",
         });
 
         const complete = events.find(
@@ -139,14 +139,14 @@ describe("resume and JD API behavior", () => {
         );
 
         expect(complete?.resumeId).toMatch(uuidV7Pattern);
-        expect(complete?.resume.basic.name).toBe("Ava Chen");
+        expect(complete?.resume.basic.name).toBe("Asuka");
 
         const detail = await request(app).get(
             `/api/resumes/${complete?.resumeId ?? ""}`,
         );
         expect(detail.status).toBe(200);
         expect(parseResumeInfoResult(detail.body).resume.basic.name).toBe(
-            "Ava Chen",
+            "Asuka",
         );
     });
 
@@ -162,9 +162,9 @@ describe("resume and JD API behavior", () => {
             .post("/api/resumes/analyze/stream")
             .set("accept", "text/event-stream")
             .set("content-type", "application/pdf")
-            .set("x-file-name", "ava-chen.pdf")
+            .set("x-file-name", "asuka.pdf")
             .set("x-upload-source", "click")
-            .send(pdfWithPages(1, "Ava Chen resume"));
+            .send(pdfWithPages(1, "Asuka resume"));
 
         expect(response.status).toBe(200);
 
@@ -240,7 +240,7 @@ describe("resume and JD API behavior", () => {
         const app = createApiApp(services);
         const upload = await services.resumeStore.createPendingUpload({
             bytes: new Uint8Array(),
-            fileName: "ava-chen.pdf",
+            fileName: "asuka.pdf",
             source: "click",
         });
 
@@ -258,7 +258,7 @@ describe("resume and JD API behavior", () => {
         expect(response.status).toBe(201);
         const result = parseJdMatchResult(response.body);
         expect(result.match.resumeId).toBe(upload.resumeId);
-        expect(result.match.resumeName).toBe("Ava Chen");
+        expect(result.match.resumeName).toBe("Asuka");
         expect(
             result.match.dimensions.map((dimension) => dimension.dimension),
         ).toEqual(["edu", "project", "work", "skill", "overall"]);

@@ -38,9 +38,9 @@ test.describe("deployed Cloudflare Worker app", () => {
             );
 
             await page.getByLabel(/choose resume pdf/i).setInputFiles({
-                name: "ava-chen.pdf",
+                name: "asuka.pdf",
                 mimeType: "application/pdf",
-                buffer: pdfWithPages(1, "Ava Chen"),
+                buffer: pdfWithPages(1, "Asuka"),
             });
 
             const uploadResponse = await uploadResponsePromise.catch(
@@ -115,7 +115,7 @@ test.describe("deployed Cloudflare Worker app", () => {
 });
 
 async function expectResumeDetailVisible(page: Page): Promise<void> {
-    await expect(page.locator("main")).toContainText(/Ava Chen/i);
+    await expect(page.locator("main")).toContainText(/Asuka/i);
     await expect(page.locator("main pre")).toContainText('"rawText"');
 }
 
