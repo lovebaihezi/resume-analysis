@@ -109,6 +109,26 @@ describe("resume analysis UI behavior", () => {
             await screen.findByText(/converting pdf to markdown/i),
         ).toBeInTheDocument();
         expect(
+            await screen.findByText(/extracting content from markdown/i),
+        ).toBeInTheDocument();
+        expect(
+            screen.getByLabelText("Uploaded PDF preview"),
+        ).toBeInTheDocument();
+        expect(
+            screen.getByLabelText("First page PDF preview"),
+        ).toBeInTheDocument();
+        expect(
+            screen.queryByText("Click, drag, or paste a PDF resume."),
+        ).toBeNull();
+        expect(
+            screen.queryByRole("button", {
+                name: /resume pdf upload area/i,
+            }),
+        ).toBeNull();
+        expect(
+            screen.getByLabelText("Converting PDF to markdown complete"),
+        ).toBeInTheDocument();
+        expect(
             await screen.findByLabelText("Converting PDF to markdown duration"),
         ).toHaveTextContent(/^(?:\d+ms|\d+\.\d+s)$/);
         const tokenRow = await screen.findByLabelText(

@@ -16,6 +16,6 @@ body {
     margin: 0;
 }
 
-.pdf-preview object {
+button.pdf-preview object {
     pointer-events: none;
 }
