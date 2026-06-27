@@ -6,6 +6,7 @@ import {
     parseJdAnalyzeResult,
     parseJdInfoResult,
     parseJdListResult,
+    parseJdMatchResult,
     parseResumeInfoResult,
     parseResumeListResult,
     parseResumeStatusResult,
@@ -14,6 +15,7 @@ import {
 } from "../../src/shared/schemas";
 import type { ResumeStreamEvent } from "../../src/shared/resumeStream";
 import { pdfWithPages } from "../fixtures/pdf";
+import { sampleResume } from "../fixtures/sampleData";
 
 const uuidV7Pattern =
     /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -231,6 +233,42 @@ describe("resume and JD API behavior", () => {
         expect(first.status).toBe(201);
         expect(duplicate.status).toBe(409);
         expect(duplicate.body.error).toMatch(/already exists/i);
+    });
+
+    it("matches a raw job description against a ready resume with five AI dimensions", async () => {
+        const services = createTestServices();
+        const app = createApiApp(services);
+        const upload = await services.resumeStore.createPendingUpload({
+            bytes: new Uint8Array(),
+            fileName: "ava-chen.pdf",
+            source: "click",
+        });
+
+        await services.resumeStore.completePendingAnalysis(
+            upload.resumeId,
+            sampleResume,
+        );
+
+        const response = await request(app).post("/api/jds/match").send({
+            rawText:
+                "Senior frontend engineer role requiring React, XState, Cloudflare Workers, and accessibility experience.",
+            resumeId: upload.resumeId,
+        });
+
+        expect(response.status).toBe(201);
+        const result = parseJdMatchResult(response.body);
+        expect(result.match.resumeId).toBe(upload.resumeId);
+        expect(result.match.resumeName).toBe("Ava Chen");
+        expect(
+            result.match.dimensions.map((dimension) => dimension.dimension),
+        ).toEqual(["edu", "project", "work", "skill", "overall"]);
+        expect(result.match.dimensions[3]).toMatchObject({
+            label: "Skill",
+            percentage: 100,
+            score: 5,
+        });
+        expect(result.match.intro.advantages).toMatch(/React/i);
+        expect(result.match.intro.disadvantages).toMatch(/accessibility/i);
     });
 });
 

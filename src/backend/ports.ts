@@ -3,6 +3,7 @@ import type {
     JobDescriptionSummary,
     ResumeAnalysis,
     ResumeDocument,
+    ResumeJdMatch,
     ResumeMetadata,
     UploadSource,
     ResumeSummary,
@@ -71,6 +72,10 @@ export interface AiExtractor {
         callbacks: ResumeExtractionStreamCallbacks,
     ): Promise<ResumeAnalysis>;
     analyzeJobDescription(rawText: string): Promise<JobDescription>;
+    matchResumeToJobDescription(
+        jd: JobDescription,
+        resume: ResumeDocument,
+    ): Promise<ResumeJdMatch>;
 }
 
 export interface ResumeAnalysisQueue {

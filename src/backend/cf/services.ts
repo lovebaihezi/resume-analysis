@@ -14,12 +14,13 @@ import type {
 import { DuplicateJobDescriptionError } from "../ports";
 import { createResumeId } from "../ids";
 import { normalizeResumeAnalysis } from "../normalization";
-import { parseResumeAnalysis } from "../../shared/schemas";
+import { parseResumeAnalysis, parseResumeJdMatch } from "../../shared/schemas";
 import type {
     JobDescription,
     JobDescriptionSummary,
     ResumeAnalysis,
     ResumeDocument,
+    ResumeJdMatch,
     ResumeMetadata,
     ResumeSummary,
 } from "../../shared/types";
@@ -42,11 +43,20 @@ const DEFAULT_GEMINI_RESUME_MODEL = "gemini-3.5-flash";
 const GOOGLE_AI_STUDIO_PROVIDER = "google-ai-studio";
 const MAX_RESUME_MARKDOWN_CHARS = 3_500;
 const JD_EXTRACTION_MAX_TOKENS = 2048;
+const JD_MATCH_MAX_TOKENS = 2048;
+const MAX_MATCH_RESUME_CHARS = 6_000;
 const GEMINI_RESUME_MAX_OUTPUT_TOKENS = 8192;
 const RESUME_SECTION_PATTERN =
     /(?:^|\n)(?:#{1,6}\s*)?(Education|Work Experience|Open-Source Contributions|Research Experience|Projects?|Skills)\b[^\n]*(?:\n[\s\S]*?)(?=\n(?:#{1,6}\s*)?(?:Education|Work Experience|Open-Source Contributions|Research Experience|Projects?|Skills)\b|$)/gi;
 const RESUME_REGISTRY_NAME = "__resume_registry__";
 const JD_STORE_NAME = "__jd_store__";
+const MATCH_DIMENSION_CONFIG = [
+    { dimension: "edu", label: "Edu" },
+    { dimension: "project", label: "Project" },
+    { dimension: "work", label: "Work" },
+    { dimension: "skill", label: "Skill" },
+    { dimension: "overall", label: "Overall" },
+] as const;
 
 export type CloudflareEnv = Env & {
     AI: Ai;
@@ -296,13 +306,29 @@ class WorkersAiExtractor implements AiExtractor {
         return normalizeJd(response, rawText);
     }
 
+    async matchResumeToJobDescription(
+        jd: JobDescription,
+        resume: ResumeDocument,
+    ): Promise<ResumeJdMatch> {
+        const response = await this.runJsonPrompt(
+            JD_EXTRACTION_MODEL,
+            "resume-match",
+            jdMatchPrompt(jd, resume),
+        );
+
+        return normalizeResumeJdMatch(response, resume);
+    }
+
     private async runJsonPrompt(
         model: string,
-        task: "job-description",
+        task: "job-description" | "resume-match",
         content: string,
     ): Promise<unknown> {
         const startedAt = Date.now();
-        const maxTokens = JD_EXTRACTION_MAX_TOKENS;
+        const maxTokens =
+            task === "resume-match"
+                ? JD_MATCH_MAX_TOKENS
+                : JD_EXTRACTION_MAX_TOKENS;
         let response: unknown;
 
         console.info("resume-ai", {
@@ -326,7 +352,7 @@ class WorkersAiExtractor implements AiExtractor {
                     messages: [
                         {
                             content:
-                                "You extract hiring documents and return only valid JSON. Do not include reasoning, analysis, explanations, or markdown.",
+                                "You analyze hiring documents and return only valid JSON. Do not include reasoning, explanations, or markdown.",
                             role: "system",
                         },
                         {
@@ -646,6 +672,30 @@ Raw JD:
 ${rawText}`;
 }
 
+function jdMatchPrompt(jd: JobDescription, resume: ResumeDocument): string {
+    return `Match this resume against the job description and return only valid JSON.
+Return this exact shape:
+{
+  "dimensions": [
+    {"dimension": "edu", "label": "Edu", "score": 0-5, "percentage": 0-100, "rationale": "string <=120 chars"},
+    {"dimension": "project", "label": "Project", "score": 0-5, "percentage": 0-100, "rationale": "string <=120 chars"},
+    {"dimension": "work", "label": "Work", "score": 0-5, "percentage": 0-100, "rationale": "string <=120 chars"},
+    {"dimension": "skill", "label": "Skill", "score": 0-5, "percentage": 0-100, "rationale": "string <=120 chars"},
+    {"dimension": "overall", "label": "Overall", "score": 0-5, "percentage": 0-100, "rationale": "string <=120 chars"}
+  ],
+  "intro": {"advantages": "string <=140 chars", "disadvantages": "string <=140 chars"}
+}
+Rules:
+- Include exactly the five dimensions listed above.
+- Score is the chart value from 0 to 5. Percentage must equal score / 5 * 100 rounded to a whole number.
+- Judge only from evidence in the resume and the job description.
+- Keep intro as one brief advantage and one brief disadvantage.
+Job description:
+${JSON.stringify(jd)}
+Resume:
+${compactJson(resume.resume, MAX_MATCH_RESUME_CHARS)}`;
+}
+
 function parseAiJson(response: unknown): unknown {
     const directJson = readDirectJson(response);
 
@@ -878,7 +928,8 @@ function isAppJson(record: Record<string, unknown>): boolean {
         ("rawText" in record && "basic" in record) ||
         ("title" in record &&
             "requiredSkills" in record &&
-            "requiredExperiences" in record)
+            "requiredExperiences" in record) ||
+        ("dimensions" in record && "intro" in record)
     );
 }
 
@@ -991,6 +1042,144 @@ function normalizeJd(data: unknown, rawText: string): JobDescription {
         tags: value.tags ?? [],
         title,
     };
+}
+
+function normalizeResumeJdMatch(
+    data: unknown,
+    resume: ResumeDocument,
+): ResumeJdMatch {
+    const value = asRecord(data) ?? {};
+    const dimensionsValue = Array.isArray(value.dimensions)
+        ? value.dimensions
+        : Array.isArray(value.scores)
+          ? value.scores
+          : [];
+    const intro = asRecord(value.intro);
+    const normalized: ResumeJdMatch = {
+        dimensions: MATCH_DIMENSION_CONFIG.map((config) =>
+            normalizeMatchDimension(config, dimensionsValue),
+        ),
+        intro: {
+            advantages: compactOneLine(
+                readString(intro?.advantages) ??
+                    readString(value.advantages) ??
+                    "Relevant strengths require human review.",
+                180,
+            ),
+            disadvantages: compactOneLine(
+                readString(intro?.disadvantages) ??
+                    readString(value.disadvantages) ??
+                    "Potential gaps require human review.",
+                180,
+            ),
+        },
+        resumeId: resume.resumeId,
+        resumeName: resume.resume.basic.name || "Unknown",
+    };
+
+    return parseResumeJdMatch(normalized);
+}
+
+function normalizeMatchDimension(
+    config: (typeof MATCH_DIMENSION_CONFIG)[number],
+    dimensions: unknown[],
+): ResumeJdMatch["dimensions"][number] {
+    const source: Record<string, unknown> =
+        dimensions
+            .map((dimension) => asRecord(dimension))
+            .find(
+                (dimension) =>
+                    normalizeDimensionName(
+                        readString(dimension?.dimension) ??
+                            readString(dimension?.label) ??
+                            "",
+                    ) === config.dimension,
+            ) ?? {};
+    const rawPercentage =
+        readFiniteNumber(source.percentage) ??
+        readFiniteNumber(source.matchPercentage);
+    const rawScore =
+        readFiniteNumber(source.score) ??
+        (rawPercentage === undefined ? 0 : rawPercentage / 20);
+    const score = roundToTenth(clamp(rawScore, 0, 5));
+    const percentage = Math.round(clamp(rawPercentage ?? score * 20, 0, 100));
+
+    return {
+        dimension: config.dimension,
+        label: config.label,
+        percentage,
+        rationale: compactOneLine(
+            readString(source.rationale) ??
+                readString(source.reason) ??
+                "No model rationale returned.",
+            140,
+        ),
+        score,
+    };
+}
+
+function normalizeDimensionName(
+    value: string,
+): ResumeJdMatch["dimensions"][number]["dimension"] | "" {
+    const normalized = value.toLowerCase().replace(/[^a-z]/g, "");
+
+    if (normalized === "education" || normalized === "edu") {
+        return "edu";
+    }
+
+    if (normalized === "projects" || normalized === "project") {
+        return "project";
+    }
+
+    if (normalized === "work" || normalized === "experience") {
+        return "work";
+    }
+
+    if (normalized === "skills" || normalized === "skill") {
+        return "skill";
+    }
+
+    if (normalized === "overall") {
+        return "overall";
+    }
+
+    return "";
+}
+
+function readFiniteNumber(value: unknown): number | undefined {
+    if (typeof value === "number" && Number.isFinite(value)) {
+        return value;
+    }
+
+    if (typeof value === "string") {
+        const parsed = Number.parseFloat(value);
+
+        return Number.isFinite(parsed) ? parsed : undefined;
+    }
+
+    return undefined;
+}
+
+function clamp(value: number, min: number, max: number): number {
+    return Math.min(max, Math.max(min, value));
+}
+
+function roundToTenth(value: number): number {
+    return Math.round(value * 10) / 10;
+}
+
+function compactOneLine(value: string, maxChars: number): string {
+    const compacted = value.replace(/\s+/g, " ").trim();
+
+    return compacted.length <= maxChars
+        ? compacted
+        : compacted.slice(0, maxChars).trimEnd();
+}
+
+function compactJson(value: unknown, maxChars: number): string {
+    const json = JSON.stringify(value);
+
+    return json.length <= maxChars ? json : json.slice(0, maxChars);
 }
 
 function bytesToArrayBuffer(bytes: Uint8Array): ArrayBuffer {

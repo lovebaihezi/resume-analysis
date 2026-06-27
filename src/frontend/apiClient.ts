@@ -3,6 +3,7 @@ import type {
     JdAnalyzeResult,
     JdInfoResult,
     JdListResult,
+    JdMatchResult,
     ResumeInfoResult,
     ResumeListResult,
     ResumeStatusResult,
@@ -17,6 +18,7 @@ import {
     parseJdAnalyzeResult,
     parseJdInfoResult,
     parseJdListResult,
+    parseJdMatchResult,
     parseResumeAnalysis,
     parseResumeInfoResult,
     parseResumeListResult,
@@ -58,6 +60,7 @@ export interface ApiClient {
     getResumeInfo(resumeId: string): Promise<ResumeInfoResult>;
     getResumeStatus(resumeId: string): Promise<ResumeStatusResult>;
     analyzeJd(rawText: string): Promise<JdAnalyzeResult>;
+    matchJdResume(rawText: string, resumeId: string): Promise<JdMatchResult>;
     listJds(): Promise<JdListResult>;
     getJdInfo(id: string): Promise<JdInfoResult>;
 }
@@ -174,6 +177,14 @@ export const browserApiClient: ApiClient = {
         return parseJdAnalyzeResult(
             await postJson("/api/jds/analyze", {
                 rawText,
+            }),
+        );
+    },
+    async matchJdResume(rawText, resumeId) {
+        return parseJdMatchResult(
+            await postJson("/api/jds/match", {
+                rawText,
+                resumeId,
             }),
         );
     },

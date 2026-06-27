@@ -19,6 +19,7 @@ import type {
     JobDescriptionSummary,
     ResumeAnalysis,
     ResumeDocument,
+    ResumeJdMatch,
     ResumeMetadata,
     ResumeSummary,
 } from "../shared/types";
@@ -79,6 +80,44 @@ const fixtureJd: JobDescription = {
     requiredSkills: ["React", "XState", "Cloudflare Workers"],
     requiredExperiences: ["5+ years frontend engineering", "Accessibility"],
 };
+
+const fixtureMatchDimensions: ResumeJdMatch["dimensions"] = [
+    {
+        dimension: "edu",
+        label: "Edu",
+        percentage: 80,
+        rationale: "Master degree aligns with the role baseline.",
+        score: 4,
+    },
+    {
+        dimension: "project",
+        label: "Project",
+        percentage: 80,
+        rationale: "Resume analyzer project is directly relevant.",
+        score: 4,
+    },
+    {
+        dimension: "work",
+        label: "Work",
+        percentage: 90,
+        rationale: "Senior frontend work maps to the job scope.",
+        score: 4.5,
+    },
+    {
+        dimension: "skill",
+        label: "Skill",
+        percentage: 100,
+        rationale: "React, XState, and Workers are present.",
+        score: 5,
+    },
+    {
+        dimension: "overall",
+        label: "Overall",
+        percentage: 90,
+        rationale: "Strong frontend and edge platform fit.",
+        score: 4.5,
+    },
+];
 
 class MemoryResumeStore implements ResumeStore {
     readonly pending = new Map<string, PendingResumeUpload>();
@@ -264,6 +303,7 @@ class MemoryJdStore implements JobDescriptionStore {
 
 type TestServicesOptions = {
     jd?: JobDescription;
+    match?: ResumeJdMatch;
     onExtractResume?: (input: ResumeExtractionInput) => void;
     resume?: ResumeAnalysis;
 };
@@ -312,6 +352,27 @@ class TestAiExtractor implements AiExtractor {
             ...(this.options.jd ?? fixtureJd),
             rawText,
         };
+    }
+
+    async matchResumeToJobDescription(
+        _jd: JobDescription,
+        resume: ResumeDocument,
+    ): Promise<ResumeJdMatch> {
+        const fixture = this.options.match;
+
+        return (
+            fixture ?? {
+                dimensions: fixtureMatchDimensions,
+                intro: {
+                    advantages:
+                        "Advantages: strong React and Workers delivery evidence.",
+                    disadvantages:
+                        "Disadvantages: accessibility impact is lighter than requested.",
+                },
+                resumeId: resume.resumeId,
+                resumeName: resume.resume.basic.name,
+            }
+        );
     }
 }
 
