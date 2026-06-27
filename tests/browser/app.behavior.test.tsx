@@ -155,6 +155,44 @@ describe("resume analysis UI behavior", () => {
         await expectResumeDetailVisibleAfterRefresh("Asuka");
     });
 
+    it("filters the uploaded resume virtual list with one search system", async () => {
+        await resetBackend({ seedResumeCount: 40 });
+        const user = userEvent.setup();
+        renderApp("/resumes");
+
+        const search = await screen.findByRole("searchbox", {
+            name: /search resumes/i,
+        });
+
+        expect(await screen.findByText("40 total")).toBeInTheDocument();
+        expect(screen.getByRole("link", { name: "Asuka" })).toBeVisible();
+        expect(
+            screen.queryByRole("link", { name: "Candidate 39" }),
+        ).not.toBeInTheDocument();
+
+        await user.type(search, "candidate 39");
+
+        expect(await screen.findByText("1 of 40 shown")).toBeInTheDocument();
+        expect(
+            await screen.findByRole("link", { name: "Candidate 39" }),
+        ).toBeVisible();
+        expect(
+            screen.queryByRole("link", { name: "Asuka" }),
+        ).not.toBeInTheDocument();
+
+        await user.clear(search);
+        expect(await screen.findByText("40 total")).toBeInTheDocument();
+
+        const virtualList = await screen.findByTestId("resume-virtual-list");
+
+        virtualList.scrollTop = 3_200;
+        fireEvent.scroll(virtualList);
+
+        expect(
+            await screen.findByRole("link", { name: "Candidate 39" }),
+        ).toBeVisible();
+    });
+
     it("archives a resume from the uploaded resume table", async () => {
         await resetBackend({ seedResume: true });
         const user = userEvent.setup();
@@ -412,11 +450,13 @@ async function resetBackend(
     options: {
         mode?: BackendState["mode"];
         seedResume?: boolean;
+        seedResumeCount?: number;
     } = {},
 ): Promise<void> {
     const params = new URLSearchParams({
         mode: options.mode ?? "auto",
         seedResume: String(options.seedResume ?? false),
+        seedResumeCount: String(options.seedResumeCount ?? 0),
     });
     const response = await fetch(`/__test/reset?${params}`, {
         method: "POST",
