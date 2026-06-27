@@ -63,6 +63,7 @@ describe("resume analysis UI behavior", () => {
         expect(
             await screen.findByText("Ava Chen", { selector: "p" }),
         ).toBeInTheDocument();
+        await expectStoredResumeVisibleAfterRefresh("Ava Chen");
     });
 
     it("opens the file picker from the whole upload drop zone", async () => {
@@ -166,6 +167,7 @@ describe("resume analysis UI behavior", () => {
         expect(
             await screen.findByText("Ava Chen", { selector: "p" }),
         ).toBeInTheDocument();
+        await expectStoredResumeVisibleAfterRefresh("Ava Chen");
 
         cleanup();
         window.history.replaceState(null, "", "/");
@@ -188,6 +190,7 @@ describe("resume analysis UI behavior", () => {
         expect(
             await screen.findByText("Ava Chen", { selector: "p" }),
         ).toBeInTheDocument();
+        await expectStoredResumeVisibleAfterRefresh("Ava Chen");
     });
 
     it("rejects non-PDF files in the upload surface before calling the API", async () => {
@@ -273,6 +276,20 @@ function renderApp(initialEntry: string): void {
             <App initialEntries={[initialEntry]} />
         </SWRConfig>,
     );
+}
+
+async function expectStoredResumeVisibleAfterRefresh(name: string) {
+    const resumeDetailPath = window.location.pathname;
+
+    expect(resumeDetailPath).toMatch(/^\/resumes\/.+/);
+
+    cleanup();
+    window.history.replaceState(null, "", resumeDetailPath);
+    renderApp(resumeDetailPath);
+
+    expect(
+        await screen.findByText(name, { selector: "p" }),
+    ).toBeInTheDocument();
 }
 
 type BackendState = {
