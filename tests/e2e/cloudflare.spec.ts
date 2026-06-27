@@ -115,8 +115,13 @@ test.describe("deployed Cloudflare Worker app", () => {
 });
 
 async function expectResumeDetailVisible(page: Page): Promise<void> {
-    await expect(page.locator("main")).toContainText(/Asuka/i);
-    await expect(page.locator("main pre")).toContainText('"rawText"');
+    const main = page.locator("main");
+
+    await expect(main.getByRole("heading", { name: /Asuka/i })).toBeVisible();
+    await expect(main.getByRole("heading", { name: "Edu" })).toBeVisible();
+    await expect(main.getByRole("heading", { name: "Work" })).toBeVisible();
+    await expect(main.getByRole("heading", { name: "Project" })).toBeVisible();
+    await expect(main.getByRole("heading", { name: "Skills" })).toBeVisible();
 }
 
 function resumeIdFromUrl(value: string): string | undefined {

@@ -6,9 +6,10 @@ import type {
     JdMatchResult,
     JobDescription,
     JobDescriptionSummary,
+    ResumeAnalysis,
     ResumeJdMatch,
-    ResumeSummary,
 } from "../../shared/types";
+import { ResumeDetailView } from "../components/ResumeDetailView";
 
 type JdPageProps = {
     apiClient: ApiClient;
@@ -53,8 +54,16 @@ export function JdPage({ apiClient }: JdPageProps) {
         ([, id]) => apiClient.getJdInfo(id),
     );
     const selectedJd = selectedJdData?.jd;
-    const selectedResume =
+    const selectedResumeSummary =
         resumes.find((resume) => resume.resumeId === selectedResumeId) ?? null;
+    const {
+        data: selectedResumeData,
+        error: selectedResumeError,
+        isLoading: selectedResumeIsLoading,
+    } = useSWR(
+        selectedResumeId ? ["jds.resume-detail", selectedResumeId] : null,
+        ([, id]) => apiClient.getResumeInfo(id),
+    );
     const canAddJd = Boolean(newJdText.trim());
     const canMatch = Boolean(selectedJd?.rawText.trim() && selectedResumeId);
 
@@ -244,7 +253,12 @@ export function JdPage({ apiClient }: JdPageProps) {
 
                 <div className="grid gap-4 lg:grid-cols-2">
                     <JdPreviewPanel jd={selectedJd} />
-                    <ResumePreviewPanel resume={selectedResume} />
+                    <ResumePreviewPanel
+                        error={selectedResumeError}
+                        isLoading={selectedResumeIsLoading}
+                        resume={selectedResumeData?.resume}
+                        selectedResumeName={selectedResumeSummary?.name}
+                    />
                 </div>
 
                 {isMatching ? (
@@ -566,7 +580,17 @@ function JdPreviewPanel({ jd }: { jd?: JobDescription }) {
     );
 }
 
-function ResumePreviewPanel({ resume }: { resume: ResumeSummary | null }) {
+function ResumePreviewPanel({
+    error,
+    isLoading,
+    resume,
+    selectedResumeName,
+}: {
+    error?: unknown;
+    isLoading: boolean;
+    resume?: ResumeAnalysis;
+    selectedResumeName?: string;
+}) {
     return (
         <section
             aria-labelledby="selected-resume-title"
@@ -575,49 +599,54 @@ function ResumePreviewPanel({ resume }: { resume: ResumeSummary | null }) {
             <h3 className="text-lg font-semibold" id="selected-resume-title">
                 Selected Resume
             </h3>
-            {resume ? (
-                <div className="mt-4 space-y-4">
-                    <div>
-                        <h4 className="font-semibold">{resume.name}</h4>
-                        <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
-                            <div>
-                                <dt className="text-base-content/60">
-                                    Work Duration
-                                </dt>
-                                <dd className="font-medium">
-                                    {resume.workDuration}
-                                </dd>
-                            </div>
-                            <div>
-                                <dt className="text-base-content/60">
-                                    Highest Education
-                                </dt>
-                                <dd className="font-medium">
-                                    {resume.highestEducation}
-                                </dd>
-                            </div>
-                        </dl>
-                    </div>
-                    <div>
-                        <h4 className="font-medium">Skills</h4>
-                        <div className="mt-2 flex flex-wrap gap-2">
-                            {resume.skills.map((skill) => (
-                                <span
-                                    className="badge badge-outline"
-                                    key={skill}
-                                >
-                                    {skill}
-                                </span>
-                            ))}
-                        </div>
-                    </div>
-                </div>
-            ) : (
+            {!selectedResumeName ? (
                 <p className="mt-3 text-sm text-base-content/70">
                     Select a resume to preview it.
                 </p>
+            ) : isLoading ? (
+                <ResumeInlineSkeleton />
+            ) : error ? (
+                <div className="alert alert-error mt-4">
+                    <span>Failed to load {selectedResumeName}.</span>
+                </div>
+            ) : resume ? (
+                <div className="mt-4">
+                    <ResumeDetailView
+                        headingId="selected-resume-detail-name"
+                        resume={resume}
+                    />
+                </div>
+            ) : (
+                <p className="mt-3 text-sm text-base-content/70">
+                    Resume details are unavailable.
+                </p>
             )}
         </section>
+    );
+}
+
+function ResumeInlineSkeleton() {
+    return (
+        <div
+            aria-label="Selected resume loading preview"
+            className="mt-4 space-y-5"
+        >
+            <div>
+                <div className="skeleton h-9 w-56 max-w-full" />
+                <div className="mt-3 flex gap-2 overflow-hidden">
+                    <div className="skeleton h-8 w-28 shrink-0" />
+                    <div className="skeleton h-8 w-36 shrink-0" />
+                </div>
+            </div>
+            <div className="space-y-3">
+                <div className="skeleton h-6 w-20" />
+                <div className="skeleton h-16 w-full" />
+            </div>
+            <div className="space-y-3">
+                <div className="skeleton h-6 w-24" />
+                <div className="skeleton h-20 w-full" />
+            </div>
+        </div>
     );
 }
 

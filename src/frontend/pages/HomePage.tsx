@@ -1,8 +1,6 @@
 import { CheckCircleIcon } from "@phosphor-icons/react";
 import { siGoogledocs } from "simple-icons";
-import katex from "katex";
-import "katex/dist/katex.min.css";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSWRConfig } from "swr";
 import type { ApiClient, UploadSource } from "../apiClient";
 import type { ExtractionStatusMessage, ExtractionToken } from "../appMachine";
@@ -13,8 +11,18 @@ type HomePageProps = {
     apiClient: ApiClient;
 };
 
+type LatexRenderer = typeof import("katex").default;
+
+type LatexRendererState =
+    | { status: "idle" | "loading" | "error" }
+    | { renderer: LatexRenderer; status: "ready" };
+
+let latexRendererPromise: Promise<LatexRenderer> | undefined;
+
 export function HomePage({ apiClient }: HomePageProps) {
     const inputRef = useRef<HTMLInputElement>(null);
+    const [latexRendererState, setLatexRendererState] =
+        useState<LatexRendererState>({ status: "idle" });
     const [previewUrl, setPreviewUrl] = useState<string>();
     const { mutate } = useSWRConfig();
     const { send, state } = useAppRuntime();
@@ -65,11 +73,31 @@ export function HomePage({ apiClient }: HomePageProps) {
         return "";
     }, [latestStreamMessage, upload.status]);
 
+    const loadLatexRenderer = useCallback(() => {
+        setLatexRendererState((current) => {
+            if (current.status === "ready" || current.status === "loading") {
+                return current;
+            }
+
+            return { status: "loading" };
+        });
+
+        void loadLatexRendererModule()
+            .then((renderer) => {
+                setLatexRendererState({ renderer, status: "ready" });
+            })
+            .catch(() => {
+                setLatexRendererState({ status: "error" });
+            });
+    }, []);
+
     async function handleFile(file: File, source: UploadSource): Promise<void> {
         if (!isPdf(file)) {
             send({ message: "PDF files only", type: "UPLOAD_REJECTED" });
             return;
         }
+
+        loadLatexRenderer();
 
         if (previewUrl) {
             URL.revokeObjectURL(previewUrl);
@@ -123,6 +151,7 @@ export function HomePage({ apiClient }: HomePageProps) {
     }
 
     function openFilePicker() {
+        loadLatexRenderer();
         inputRef.current?.click();
     }
 
@@ -214,6 +243,7 @@ export function HomePage({ apiClient }: HomePageProps) {
             {showExtractionPreview ? (
                 <ExtractionStreamPreview
                     fileName={upload.fileName ?? "resume.pdf"}
+                    latexRendererState={latexRendererState}
                     messages={state.context.extraction.messages}
                     progressText={progressText}
                     tokens={state.context.extraction.tokens}
@@ -253,11 +283,13 @@ function PdfPreviewObject({
 
 function ExtractionStreamPreview({
     fileName,
+    latexRendererState,
     messages,
     progressText,
     tokens,
 }: {
     fileName: string;
+    latexRendererState: LatexRendererState;
     messages: ExtractionStatusMessage[];
     progressText: string;
     tokens: ExtractionToken[];
@@ -337,17 +369,10 @@ function ExtractionStreamPreview({
                 </div>
                 <div className="mt-5 max-h-80 overflow-y-auto rounded border border-base-300 bg-base-200/60">
                     {tokens.length > 0 ? (
-                        <ul className="flex flex-wrap items-start gap-2 p-3">
-                            {tokens.map((token) => (
-                                <li
-                                    aria-label={`${token.path} assigned ${token.value}`}
-                                    className="min-w-0 max-w-full rounded border border-base-300 bg-base-100/80 px-2 py-1 text-sm leading-5 break-words text-base-content/80"
-                                    key={`${token.path}-${token.receivedAt}-${token.value}`}
-                                >
-                                    <RenderedLatexAssignment token={token} />
-                                </li>
-                            ))}
-                        </ul>
+                        <TokenList
+                            latexRendererState={latexRendererState}
+                            tokens={tokens}
+                        />
                     ) : (
                         <div className="space-y-2 p-3">
                             <div className="skeleton h-4 w-3/4" />
@@ -361,9 +386,58 @@ function ExtractionStreamPreview({
     );
 }
 
-function RenderedLatexAssignment({ token }: { token: ExtractionToken }) {
+function TokenList({
+    latexRendererState,
+    tokens,
+}: {
+    latexRendererState: LatexRendererState;
+    tokens: ExtractionToken[];
+}) {
+    if (latexRendererState.status !== "ready") {
+        return (
+            <div className="flex items-center gap-3 p-3 text-sm text-base-content/70">
+                {latexRendererState.status === "error" ? null : (
+                    <span className="loading loading-spinner loading-xs text-info" />
+                )}
+                <span>
+                    {latexRendererState.status === "error"
+                        ? "Unable to load math renderer."
+                        : "Loading math renderer..."}
+                </span>
+            </div>
+        );
+    }
+
+    return (
+        <ul className="flex flex-wrap items-start gap-2 p-3">
+            {tokens.map((token) => (
+                <li
+                    aria-label={`${token.path} assigned ${token.value}`}
+                    className="min-w-0 max-w-full rounded border border-base-300 bg-base-100/80 px-2 py-1 text-sm leading-5 break-words text-base-content/80"
+                    key={`${token.path}-${token.receivedAt}-${token.value}`}
+                >
+                    <RenderedLatexAssignment
+                        renderer={latexRendererState.renderer}
+                        token={token}
+                    />
+                </li>
+            ))}
+        </ul>
+    );
+}
+
+function RenderedLatexAssignment({
+    renderer,
+    token,
+}: {
+    renderer: LatexRenderer;
+    token: ExtractionToken;
+}) {
     const expression = useMemo(() => latexAssignment(token), [token]);
-    const html = useMemo(() => renderLatexAssignment(expression), [expression]);
+    const html = useMemo(
+        () => renderLatexAssignment(renderer, expression),
+        [expression, renderer],
+    );
 
     return (
         <span
@@ -373,8 +447,11 @@ function RenderedLatexAssignment({ token }: { token: ExtractionToken }) {
     );
 }
 
-function renderLatexAssignment(expression: string): string {
-    return katex.renderToString(expression, {
+function renderLatexAssignment(
+    renderer: LatexRenderer,
+    expression: string,
+): string {
+    return renderer.renderToString(expression, {
         displayMode: false,
         strict: "ignore",
         throwOnError: false,
@@ -384,6 +461,15 @@ function renderLatexAssignment(expression: string): string {
 
 function latexAssignment(token: ExtractionToken): string {
     return `\\mathrm{${escapeLatex(token.path)}} \\rightarrow \\text{${escapeLatex(token.value)}}`;
+}
+
+function loadLatexRendererModule(): Promise<LatexRenderer> {
+    latexRendererPromise ??= Promise.all([
+        import("katex"),
+        import("katex/dist/katex.min.css"),
+    ]).then(([module]) => module.default);
+
+    return latexRendererPromise;
 }
 
 function useLiveNow(enabled: boolean): number {
