@@ -1,20 +1,104 @@
-import { useState } from "react";
+import { ArchiveIcon, MagnifyingGlassIcon } from "@phosphor-icons/react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import useSWR, { mutate as mutateGlobal } from "swr";
 import type { ApiClient } from "../apiClient";
 import { AppLink } from "../routing/AppLink";
+import type { ResumeSummary } from "../../shared/types";
 
 type ResumesPageProps = {
     apiClient: ApiClient;
 };
+
+const RESUME_ROW_HEIGHT = 84;
+const RESUME_LIST_MAX_HEIGHT = 560;
+const RESUME_LIST_OVERSCAN = 6;
+const RESUME_TABLE_COLUMNS =
+    "minmax(14rem, 1.25fr) minmax(10rem, 0.85fr) minmax(10rem, 0.85fr) minmax(18rem, 1.45fr) 3.5rem";
 
 export function ResumesPage({ apiClient }: ResumesPageProps) {
     const [archiveError, setArchiveError] = useState<string | null>(null);
     const [archivingResumeId, setArchivingResumeId] = useState<string | null>(
         null,
     );
+    const [searchQuery, setSearchQuery] = useState("");
+    const [scrollTop, setScrollTop] = useState(0);
+    const [viewportHeight, setViewportHeight] = useState(0);
+    const virtualListRef = useRef<HTMLTableSectionElement | null>(null);
     const { data, isLoading, mutate } = useSWR("resumes.table", () =>
         apiClient.listResumes(),
     );
+    const searchTokens = useMemo(
+        () => tokenizeSearchQuery(searchQuery),
+        [searchQuery],
+    );
+    const filteredResumes = useMemo(
+        () => filterResumes(data?.resumes ?? [], searchTokens),
+        [data?.resumes, searchTokens],
+    );
+    const visibleRange = useMemo(
+        () =>
+            getVirtualRange({
+                itemCount: filteredResumes.length,
+                itemHeight: RESUME_ROW_HEIGHT,
+                overscan: RESUME_LIST_OVERSCAN,
+                scrollTop,
+                viewportHeight:
+                    viewportHeight ||
+                    Math.min(
+                        filteredResumes.length * RESUME_ROW_HEIGHT,
+                        RESUME_LIST_MAX_HEIGHT,
+                    ),
+            }),
+        [filteredResumes.length, scrollTop, viewportHeight],
+    );
+    const visibleResumes = filteredResumes.slice(
+        visibleRange.startIndex,
+        visibleRange.endIndex,
+    );
+    const totalTableHeight = filteredResumes.length * RESUME_ROW_HEIGHT;
+    const virtualListHeight =
+        filteredResumes.length > 0
+            ? Math.min(totalTableHeight, RESUME_LIST_MAX_HEIGHT)
+            : undefined;
+    const searchIsActive = searchTokens.length > 0;
+    const resultCountText = searchIsActive
+        ? `${filteredResumes.length} of ${data?.count ?? 0} shown`
+        : `${data?.count ?? 0} total`;
+
+    useEffect(() => {
+        const element = virtualListRef.current;
+
+        if (!element) {
+            return;
+        }
+
+        function updateViewportHeight(): void {
+            setViewportHeight(element?.clientHeight ?? 0);
+        }
+
+        updateViewportHeight();
+
+        if (typeof ResizeObserver === "undefined") {
+            window.addEventListener("resize", updateViewportHeight);
+
+            return () => {
+                window.removeEventListener("resize", updateViewportHeight);
+            };
+        }
+
+        const resizeObserver = new ResizeObserver(updateViewportHeight);
+
+        resizeObserver.observe(element);
+
+        return () => {
+            resizeObserver.disconnect();
+        };
+    }, [filteredResumes.length]);
+
+    useEffect(() => {
+        setScrollTop(0);
+        virtualListRef.current?.scrollTo({ top: 0 });
+    }, [searchQuery, data?.resumes]);
 
     async function archiveResume(resumeId: string): Promise<void> {
         setArchiveError(null);
@@ -40,85 +124,118 @@ export function ResumesPage({ apiClient }: ResumesPageProps) {
 
     return (
         <section className="mx-auto max-w-6xl px-4 py-8">
-            <div className="mb-5 flex items-end justify-between">
+            <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
                 <div>
                     <h1 className="text-2xl font-semibold">Uploaded Resumes</h1>
-                    <p className="text-base-content/70">{data.count} total</p>
+                    <p className="text-base-content/70">{resultCountText}</p>
                 </div>
+                <label className="input input-bordered flex w-full items-center gap-2 sm:max-w-sm">
+                    <MagnifyingGlassIcon
+                        aria-hidden="true"
+                        className="h-4 w-4 text-base-content/50"
+                    />
+                    <span className="sr-only">Search resumes</span>
+                    <input
+                        aria-label="Search resumes"
+                        className="grow"
+                        disabled={data.resumes.length === 0}
+                        onChange={(event) => {
+                            setSearchQuery(event.target.value);
+                        }}
+                        placeholder="Search resumes"
+                        type="search"
+                        value={searchQuery}
+                    />
+                </label>
             </div>
             <div className="overflow-x-auto rounded border border-base-300 bg-base-100">
-                <table className="table">
-                    <thead>
-                        <tr>
-                            <th>Resume Name</th>
-                            <th>Work Duration</th>
-                            <th>Highest Edu Seat</th>
-                            <th>Skills</th>
-                            <th>
+                <table
+                    aria-label="Uploaded resumes"
+                    aria-rowcount={filteredResumes.length + 1}
+                    className="w-full min-w-[920px] table-fixed"
+                >
+                    <thead className="block w-full border-b border-base-300 bg-base-200/70">
+                        <tr
+                            className="grid w-full items-center text-left text-sm font-semibold text-base-content/70"
+                            style={{
+                                gridTemplateColumns: RESUME_TABLE_COLUMNS,
+                            }}
+                        >
+                            <th className="px-4 py-3 text-left font-semibold">
+                                Resume Name
+                            </th>
+                            <th className="px-4 py-3 text-left font-semibold">
+                                Work Duration
+                            </th>
+                            <th className="px-4 py-3 text-left font-semibold">
+                                Highest Edu Seat
+                            </th>
+                            <th className="px-4 py-3 text-left font-semibold">
+                                Skills
+                            </th>
+                            <th className="px-4 py-3 text-left font-semibold">
                                 <span className="sr-only">Actions</span>
                             </th>
                         </tr>
                     </thead>
-                    <tbody>
-                        {data.resumes.length === 0 ? (
-                            <tr>
+                    {filteredResumes.length === 0 ? (
+                        <tbody className="block w-full">
+                            <tr
+                                className="grid w-full items-center"
+                                style={{
+                                    gridTemplateColumns: RESUME_TABLE_COLUMNS,
+                                    minHeight: RESUME_ROW_HEIGHT,
+                                }}
+                            >
                                 <td
-                                    className="text-base-content/60"
+                                    className="px-4 py-5 text-base-content/60"
                                     colSpan={5}
+                                    style={{ gridColumn: "1 / -1" }}
                                 >
-                                    No resumes uploaded.
+                                    {data.resumes.length === 0
+                                        ? "No resumes uploaded."
+                                        : "No resumes match your search."}
                                 </td>
                             </tr>
-                        ) : null}
-                        {data.resumes.map((resume) => (
-                            <tr key={resume.resumeId}>
-                                <td>
-                                    <AppLink
-                                        className="link link-info"
-                                        to={`/resumes/${resume.resumeId}`}
-                                    >
-                                        {resume.name}
-                                    </AppLink>
-                                </td>
-                                <td>{resume.workDuration}</td>
-                                <td>{resume.highestEducation}</td>
-                                <td>
-                                    <div className="flex flex-wrap gap-2">
-                                        {resume.skills.map((skill) => (
-                                            <span
-                                                className="badge badge-outline"
-                                                key={skill}
-                                            >
-                                                {skill}
-                                            </span>
-                                        ))}
-                                    </div>
-                                </td>
-                                <td className="w-14 text-right">
-                                    <button
-                                        aria-label={`Archive ${resume.name}`}
-                                        className="btn btn-ghost btn-square btn-sm text-error"
-                                        disabled={
-                                            archivingResumeId ===
-                                            resume.resumeId
-                                        }
-                                        onClick={() => {
-                                            void archiveResume(resume.resumeId);
-                                        }}
-                                        title="Archive"
-                                        type="button"
-                                    >
-                                        {archivingResumeId ===
-                                        resume.resumeId ? (
-                                            <span className="loading loading-spinner loading-xs" />
-                                        ) : (
-                                            <SimpleIconsArchiveIcon />
-                                        )}
-                                    </button>
-                                </td>
+                        </tbody>
+                    ) : (
+                        <tbody
+                            aria-label="Resume results"
+                            className="relative block w-full overflow-y-auto"
+                            data-testid="resume-virtual-list"
+                            onScroll={(event) => {
+                                setScrollTop(event.currentTarget.scrollTop);
+                            }}
+                            ref={virtualListRef}
+                            style={{ height: virtualListHeight }}
+                        >
+                            <tr
+                                aria-hidden="true"
+                                className="block w-full"
+                                style={{ height: totalTableHeight }}
+                            >
+                                <td
+                                    aria-label="Resume list spacer"
+                                    className="block p-0"
+                                    colSpan={5}
+                                />
                             </tr>
-                        ))}
-                    </tbody>
+                            {visibleResumes.map((resume, index) => {
+                                const itemIndex =
+                                    visibleRange.startIndex + index;
+
+                                return (
+                                    <ResumeRow
+                                        archivingResumeId={archivingResumeId}
+                                        itemIndex={itemIndex}
+                                        key={resume.resumeId}
+                                        onArchive={archiveResume}
+                                        resume={resume}
+                                    />
+                                );
+                            })}
+                        </tbody>
+                    )}
                 </table>
             </div>
             {archiveError ? (
@@ -128,15 +245,139 @@ export function ResumesPage({ apiClient }: ResumesPageProps) {
     );
 }
 
-function SimpleIconsArchiveIcon() {
+type ResumeRowProps = {
+    archivingResumeId: string | null;
+    itemIndex: number;
+    onArchive: (resumeId: string) => Promise<void>;
+    resume: ResumeSummary;
+};
+
+function ResumeRow({
+    archivingResumeId,
+    itemIndex,
+    onArchive,
+    resume,
+}: ResumeRowProps) {
+    const visibleSkills = resume.skills.slice(0, 4);
+    const hiddenSkillCount = Math.max(0, resume.skills.length - 4);
+    const isArchiving = archivingResumeId === resume.resumeId;
+
     return (
-        <svg
-            aria-hidden="true"
-            className="h-4 w-4"
-            fill="currentColor"
-            viewBox="0 0 24 24"
+        <tr
+            aria-rowindex={itemIndex + 2}
+            className="absolute left-0 right-0 grid w-full items-center border-t border-base-300 bg-base-100 text-sm"
+            style={{
+                gridTemplateColumns: RESUME_TABLE_COLUMNS,
+                height: RESUME_ROW_HEIGHT,
+                transform: `translateY(${itemIndex * RESUME_ROW_HEIGHT}px)`,
+            }}
         >
-            <path d="M22.667 22.884V24H1.333v-1.116zm-.842-1.675v1.396H2.175v-1.396zM4.233 6.14l.234.118.118 1.882.117 3.058v2.941l-.117 3.666-.02 2.47-.332.098H3.062l-.352-.098-.136-2.47-.118-3.646v-2.941l.118-3.078.107-1.892.244-.107zm16.842 0 .235.118.117 1.882.117 3.058v2.941l-.117 3.666-.02 2.47-.332.098h-1.171l-.352-.098-.137-2.47-.117-3.646v-2.941l.117-3.078.108-1.892.244-.107zm-11.79 0 .235.118.117 1.882.117 3.058v2.941l-.117 3.666-.02 2.47-.331.098H8.114l-.352-.098-.136-2.47-.117-3.646v-2.941l.117-3.078.107-1.892.244-.107zm6.457 0 .234.118.117 1.882.118 3.058v2.941l-.118 3.666-.019 2.47-.332.098H14.57l-.351-.098-.137-2.47-.117-3.646v-2.941l.117-3.078.108-1.892.244-.107zm6.083-2.511V5.58H2.175V3.628zM11.798 0l10.307 2.347-.413.723H1.951l-.618-.587Z" />
-        </svg>
+            <td className="min-w-0 px-4">
+                <AppLink
+                    className="link link-info block truncate"
+                    to={`/resumes/${resume.resumeId}`}
+                >
+                    {resume.name}
+                </AppLink>
+            </td>
+            <td className="truncate px-4 text-base-content/80">
+                {resume.workDuration}
+            </td>
+            <td className="truncate px-4 text-base-content/80">
+                {resume.highestEducation}
+            </td>
+            <td className="min-w-0 px-4">
+                <div className="flex max-h-12 flex-wrap gap-2 overflow-hidden">
+                    {visibleSkills.map((skill) => (
+                        <span className="badge badge-outline" key={skill}>
+                            {skill}
+                        </span>
+                    ))}
+                    {hiddenSkillCount > 0 ? (
+                        <span className="badge badge-ghost">
+                            +{hiddenSkillCount}
+                        </span>
+                    ) : null}
+                </div>
+            </td>
+            <td className="px-2 text-right">
+                <button
+                    aria-label={`Archive ${resume.name}`}
+                    className="btn btn-ghost btn-square btn-sm text-error"
+                    disabled={isArchiving}
+                    onClick={() => {
+                        void onArchive(resume.resumeId);
+                    }}
+                    title="Archive"
+                    type="button"
+                >
+                    {isArchiving ? (
+                        <span className="loading loading-spinner loading-xs" />
+                    ) : (
+                        <ArchiveIcon aria-hidden="true" className="h-4 w-4" />
+                    )}
+                </button>
+            </td>
+        </tr>
     );
+}
+
+type VirtualRangeInput = {
+    itemCount: number;
+    itemHeight: number;
+    overscan: number;
+    scrollTop: number;
+    viewportHeight: number;
+};
+
+function getVirtualRange({
+    itemCount,
+    itemHeight,
+    overscan,
+    scrollTop,
+    viewportHeight,
+}: VirtualRangeInput): { endIndex: number; startIndex: number } {
+    if (itemCount === 0) {
+        return { endIndex: 0, startIndex: 0 };
+    }
+
+    const visibleStart = Math.floor(scrollTop / itemHeight);
+    const visibleCount = Math.ceil(viewportHeight / itemHeight);
+    const startIndex = Math.max(0, visibleStart - overscan);
+    const endIndex = Math.min(
+        itemCount,
+        visibleStart + visibleCount + overscan,
+    );
+
+    return { endIndex, startIndex };
+}
+
+function filterResumes(
+    resumes: ResumeSummary[],
+    tokens: string[],
+): ResumeSummary[] {
+    if (tokens.length === 0) {
+        return resumes;
+    }
+
+    return resumes.filter((resume) => {
+        const searchText = normalizeSearchText(
+            [
+                resume.name,
+                resume.workDuration,
+                resume.highestEducation,
+                ...resume.skills,
+            ].join(" "),
+        );
+
+        return tokens.every((token) => searchText.includes(token));
+    });
+}
+
+function tokenizeSearchQuery(query: string): string[] {
+    return normalizeSearchText(query).split(/\s+/).filter(Boolean);
+}
+
+function normalizeSearchText(value: string): string {
+    return value.trim().toLocaleLowerCase();
 }
