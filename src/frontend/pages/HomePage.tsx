@@ -337,11 +337,11 @@ function ExtractionStreamPreview({
                 </div>
                 <div className="mt-5 max-h-80 overflow-y-auto rounded border border-base-300 bg-base-200/60">
                     {tokens.length > 0 ? (
-                        <ul className="divide-y divide-base-300">
+                        <ul className="flex flex-wrap items-start gap-2 p-3">
                             {tokens.map((token) => (
                                 <li
                                     aria-label={`${token.path} assigned ${token.value}`}
-                                    className="min-w-0 px-3 py-2 text-sm leading-5 break-words text-base-content/80"
+                                    className="min-w-0 max-w-full rounded border border-base-300 bg-base-100/80 px-2 py-1 text-sm leading-5 break-words text-base-content/80"
                                     key={`${token.path}-${token.receivedAt}-${token.value}`}
                                 >
                                     <RenderedLatexAssignment token={token} />
@@ -367,7 +367,7 @@ function RenderedLatexAssignment({ token }: { token: ExtractionToken }) {
 
     return (
         <span
-            className="inline-block max-w-full overflow-x-auto align-middle"
+            className="latex-token-assignment inline max-w-full align-middle break-words"
             dangerouslySetInnerHTML={{ __html: html }}
         />
     );
@@ -383,7 +383,7 @@ function renderLatexAssignment(expression: string): string {
 }
 
 function latexAssignment(token: ExtractionToken): string {
-    return `\\mathrm{${escapeLatex(token.path)}} \\leftarrow \\text{${escapeLatex(token.value)}}`;
+    return `\\mathrm{${escapeLatex(token.path)}} \\rightarrow \\text{${escapeLatex(token.value)}}`;
 }
 
 function useLiveNow(enabled: boolean): number {
