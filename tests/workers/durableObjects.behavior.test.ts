@@ -19,12 +19,23 @@ import { sampleJobDescription, sampleResume } from "../fixtures/sampleData";
 
 const apiOrigin = "https://resume-analysis.test";
 
+type CapturedGatewayCall = {
+    options: unknown;
+    request: unknown;
+};
+
 class FixtureAi {
+    readonly gatewayCalls: CapturedGatewayCall[] = [];
+    readonly markdownCalls: Array<{ name: string }> = [];
+    readonly runCalls: unknown[] = [];
+
     async run(
-        _model: string,
-        _input: unknown,
-        _options?: unknown,
+        model: string,
+        input: unknown,
+        options?: unknown,
     ): Promise<unknown> {
+        this.runCalls.push({ input, model, options });
+
         return {
             response: JSON.stringify(sampleJobDescription),
         };
@@ -34,7 +45,9 @@ class FixtureAi {
         run: (request: unknown, options?: unknown) => Promise<Response>;
     } {
         return {
-            run: async () => {
+            run: async (request: unknown, options?: unknown) => {
+                this.gatewayCalls.push({ options, request });
+
                 return Response.json({
                     candidates: [
                         {
@@ -55,6 +68,8 @@ class FixtureAi {
     }
 
     async toMarkdown(file: { name: string }): Promise<unknown> {
+        this.markdownCalls.push(file);
+
         return {
             data: "Ava Chen resume converted to markdown",
             format: "markdown",
@@ -83,6 +98,8 @@ describe("Cloudflare Durable Object storage behavior", () => {
         );
 
         expect(uploadResponse.status).toBe(202);
+        const uploadRequestId = uploadResponse.headers.get("x-request-id");
+        expect(uploadRequestId).toEqual(expect.any(String));
         const upload = parseResumeUploadResult(await uploadResponse.json());
         expect(upload).toMatchObject({
             status: "creating",
@@ -119,7 +136,10 @@ describe("Cloudflare Durable Object storage behavior", () => {
             [
                 {
                     attempts: 1,
-                    body: { resumeId: upload.resumeId },
+                    body: {
+                        requestId: uploadRequestId ?? undefined,
+                        resumeId: upload.resumeId,
+                    },
                     id: "message-1",
                     timestamp: new Date("2026-06-26T00:00:03.000Z"),
                 },
@@ -136,6 +156,28 @@ describe("Cloudflare Durable Object storage behavior", () => {
         const queueResult = await getQueueResult(batch, ctx);
         expect(queueResult.explicitAcks).toEqual(["message-1"]);
         expect(queueResult.retryMessages).toEqual([]);
+        expect(ai.markdownCalls).toHaveLength(1);
+        expect(ai.gatewayCalls).toHaveLength(1);
+        expect(ai.gatewayCalls[0]?.request).toMatchObject({
+            headers: {
+                "cf-aig-collect-log-payload": "false",
+            },
+        });
+        expect(ai.gatewayCalls[0]?.options).toMatchObject({
+            extraHeaders: {
+                "cf-aig-collect-log-payload": "false",
+            },
+            gateway: {
+                collectLog: true,
+                eventId: uploadRequestId,
+                metadata: {
+                    input_kind: "resume_pdf",
+                    request_id: uploadRequestId,
+                    task: "resume_extract",
+                },
+            },
+        });
+        expect(ai.runCalls).toHaveLength(0);
 
         const readyStatus = await workerExports.default.fetch(
             `${apiOrigin}/api/resumes/${upload.resumeId}/status`,
@@ -207,6 +249,7 @@ describe("Cloudflare Durable Object storage behavior", () => {
 function workerEnvWithAi(ai: FixtureAi): CloudflareEnv {
     return {
         AI: ai as unknown as Ai,
+        AI_GATEWAY_ID: "collects-auto-ai",
         AI_GATEWAY_NAME: "collects-auto-ai",
         GEMINI_MODEL: "gemini-3.5-flash",
         JD_STORE: env.JD_STORE,

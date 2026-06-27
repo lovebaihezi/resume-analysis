@@ -18,18 +18,27 @@ describe("resume and JD API behavior", () => {
 
         const response = await request(app)
             .post("/api/resumes/analyze")
+            .set("x-request-id", "api-resume-upload-test")
             .set("content-type", "application/pdf")
             .set("x-file-name", "ava-chen.pdf")
             .set("x-upload-source", "drag")
             .send(pdfWithPages(1, "Ava Chen resume"));
 
         expect(response.status).toBe(202);
+        expect(response.headers["x-request-id"]).toBe("api-resume-upload-test");
         const upload = parseResumeUploadResult(response.body);
         expect(upload.resumeId).toMatch(uuidV7Pattern);
         expect(upload.status).toBe("creating");
         expect(upload.createdAt).toEqual(expect.any(String));
         expect(upload.updatedAt).toEqual(expect.any(String));
         expect(upload.upload.source).toBe("drag");
+        expect(services.ai.calls.resume).toBe(0);
+        expect(services.resumeAnalysisQueue.jobs).toEqual([
+            {
+                requestId: "api-resume-upload-test",
+                resumeId: upload.resumeId,
+            },
+        ]);
 
         const creatingStatus = await request(app).get(
             `/api/resumes/${upload.resumeId}/status`,
@@ -69,6 +78,10 @@ describe("resume and JD API behavior", () => {
 
         expect(response.status).toBe(415);
         expect(response.body.error).toMatch(/pdf/i);
+        expect(response.body.requestId).toBe(response.headers["x-request-id"]);
+        expect(await services.resumeStore.count()).toBe(0);
+        expect(services.ai.calls.resume).toBe(0);
+        expect(services.resumeAnalysisQueue.jobs).toHaveLength(0);
     });
 
     it("rejects PDF resumes over the prototype 3 page limit before queueing analysis", async () => {
@@ -84,6 +97,10 @@ describe("resume and JD API behavior", () => {
 
         expect(response.status).toBe(413);
         expect(response.body.error).toMatch(/3 pages or fewer/i);
+        expect(response.body.requestId).toBe(response.headers["x-request-id"]);
+        expect(await services.resumeStore.count()).toBe(0);
+        expect(services.ai.calls.resume).toBe(0);
+        expect(services.resumeAnalysisQueue.jobs).toHaveLength(0);
     });
 
     it("stores analyzed job descriptions and lists their structured summaries", async () => {
@@ -128,5 +145,8 @@ describe("resume and JD API behavior", () => {
         expect(first.status).toBe(201);
         expect(duplicate.status).toBe(409);
         expect(duplicate.body.error).toMatch(/already exists/i);
+        expect(duplicate.body.requestId).toBe(
+            duplicate.headers["x-request-id"],
+        );
     });
 });

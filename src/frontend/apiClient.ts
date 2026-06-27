@@ -66,9 +66,11 @@ export const browserApiClient: ApiClient = {
             );
             xhr.addEventListener("load", () => {
                 const payload = parseJson(xhr.responseText);
+                const requestId =
+                    xhr.getResponseHeader("x-request-id") ?? undefined;
 
                 if (xhr.status < 200 || xhr.status >= 300) {
-                    reject(new Error(readError(payload) ?? "Upload failed"));
+                    reject(requestError(payload, "Upload failed", requestId));
                     return;
                 }
 
@@ -117,7 +119,11 @@ async function getJson(url: string): Promise<unknown> {
     const payload = await response.json();
 
     if (!response.ok) {
-        throw new Error(readError(payload) ?? "Request failed");
+        throw requestError(
+            payload,
+            "Request failed",
+            response.headers.get("x-request-id") ?? undefined,
+        );
     }
 
     return payload;
@@ -134,7 +140,11 @@ async function postJson(url: string, body: unknown): Promise<unknown> {
     const payload = await response.json();
 
     if (!response.ok) {
-        throw new Error(readError(payload) ?? "Request failed");
+        throw requestError(
+            payload,
+            "Request failed",
+            response.headers.get("x-request-id") ?? undefined,
+        );
     }
 
     return payload;
@@ -173,4 +183,32 @@ function readError(payload: unknown): string | undefined {
     }
 
     return undefined;
+}
+
+function readRequestId(payload: unknown): string | undefined {
+    if (
+        payload &&
+        typeof payload === "object" &&
+        "requestId" in payload &&
+        typeof payload.requestId === "string"
+    ) {
+        return payload.requestId;
+    }
+
+    return undefined;
+}
+
+function requestError(
+    payload: unknown,
+    fallback: string,
+    requestId?: string,
+): Error {
+    const message = readError(payload) ?? fallback;
+    const resolvedRequestId = readRequestId(payload) ?? requestId;
+
+    return new Error(
+        resolvedRequestId
+            ? `${message} (request ID: ${resolvedRequestId})`
+            : message,
+    );
 }
