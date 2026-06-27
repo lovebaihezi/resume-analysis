@@ -1,8 +1,14 @@
 import express from "express";
-import type { ErrorRequestHandler, Request, RequestHandler } from "express";
+import type {
+    ErrorRequestHandler,
+    Request,
+    RequestHandler,
+    Response,
+} from "express";
 import { DuplicateJobDescriptionError, type AppServices } from "./ports";
 import type { UploadSource } from "../shared/types";
 import { assertResumePdfPageLimit, PdfPageLimitError } from "./pdf";
+import type { ResumeStreamEvent } from "../shared/resumeStream";
 
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 const uploadSources = new Set(["click", "drag", "paste"]);
@@ -15,6 +21,108 @@ export function createApiApp(services: AppServices): express.Express {
     app.get("/api/health", (_req, res) => {
         res.json({ ok: true });
     });
+
+    app.post(
+        "/api/resumes/analyze/stream",
+        express.raw({
+            limit: MAX_UPLOAD_BYTES,
+            type: ["application/pdf", "application/octet-stream", "*/*"],
+        }),
+        asyncHandler(async (req, res) => {
+            const fileName = header(req, "x-file-name") ?? "resume.pdf";
+            const source = readUploadSource(req);
+            const contentType = header(req, "content-type") ?? "";
+            const bytes = toBytes(req.body);
+
+            if (!isPdf(fileName, contentType, bytes)) {
+                res.status(415).json({ error: "PDF files only" });
+                return;
+            }
+
+            try {
+                assertResumePdfPageLimit(bytes);
+            } catch (error) {
+                if (error instanceof PdfPageLimitError) {
+                    res.status(
+                        error.code === "too_many_pages" ? 413 : 422,
+                    ).json({
+                        error: error.message,
+                    });
+                    return;
+                }
+
+                throw error;
+            }
+
+            const upload = await services.resumeStore.createPendingUpload({
+                bytes,
+                fileName,
+                source,
+            });
+
+            prepareSse(res);
+
+            const sendEvent = (event: ResumeStreamEvent) => {
+                writeSse(res, event.type, event);
+            };
+
+            try {
+                const resume = await services.ai.extractResumeStream(
+                    {
+                        bytes,
+                        fileName,
+                        source,
+                    },
+                    {
+                        onStatus: (event) => {
+                            sendEvent({
+                                message: event.message,
+                                phase: event.phase,
+                                type: "status",
+                            });
+                        },
+                        onToken: (token) => {
+                            sendEvent({
+                                path: token.path,
+                                patch: token.patch,
+                                type: "token",
+                                value: token.value,
+                            });
+                        },
+                    },
+                );
+
+                sendEvent({
+                    message: "Saving extracted resume",
+                    phase: "saving_resume",
+                    type: "status",
+                });
+
+                const document =
+                    await services.resumeStore.completePendingAnalysis(
+                        upload.resumeId,
+                        resume,
+                    );
+
+                sendEvent({
+                    resume: document.resume,
+                    resumeId: document.resumeId,
+                    type: "complete",
+                });
+            } catch (error) {
+                await services.resumeStore.failPendingAnalysis(upload.resumeId);
+                sendEvent({
+                    message:
+                        error instanceof Error
+                            ? error.message
+                            : "Failed to analyze resume",
+                    type: "error",
+                });
+            } finally {
+                res.end();
+            }
+        }),
+    );
 
     app.post(
         "/api/resumes/analyze",
@@ -259,4 +367,17 @@ function isPdf(
     const pdfHeader = new TextDecoder().decode(bytes.slice(0, 5));
 
     return (hasPdfName || hasPdfType) && pdfHeader === "%PDF-";
+}
+
+function prepareSse(res: Response): void {
+    res.status(200);
+    res.setHeader("content-type", "text/event-stream; charset=utf-8");
+    res.setHeader("cache-control", "no-cache, no-transform");
+    res.setHeader("connection", "keep-alive");
+    res.flushHeaders();
+}
+
+function writeSse(res: Response, eventName: string, payload: unknown): void {
+    res.write(`event: ${eventName}\n`);
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }

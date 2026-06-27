@@ -7,6 +7,10 @@ import type {
     UploadSource,
     ResumeSummary,
 } from "../shared/types";
+import type {
+    ResumeFieldToken,
+    ResumeStreamPhase,
+} from "../shared/resumeStream";
 
 export type ResumeExtractionInput = {
     fileName: string;
@@ -24,6 +28,14 @@ export type ResumeUploadRecord = ResumeMetadata & {
 
 export type ResumeAnalysisJob = {
     resumeId: string;
+};
+
+export type ResumeExtractionStreamCallbacks = {
+    onStatus?: (event: {
+        message: string;
+        phase: ResumeStreamPhase;
+    }) => Promise<void> | void;
+    onToken?: (token: ResumeFieldToken) => Promise<void> | void;
 };
 
 export interface ResumeStore {
@@ -54,6 +66,10 @@ export interface JobDescriptionStore {
 
 export interface AiExtractor {
     extractResume(input: ResumeExtractionInput): Promise<ResumeAnalysis>;
+    extractResumeStream(
+        input: ResumeExtractionInput,
+        callbacks: ResumeExtractionStreamCallbacks,
+    ): Promise<ResumeAnalysis>;
     analyzeJobDescription(rawText: string): Promise<JobDescription>;
 }
 
