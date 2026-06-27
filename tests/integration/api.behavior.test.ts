@@ -3,8 +3,13 @@ import { describe, expect, it } from "vitest";
 import { createApiApp } from "../../src/backend/expressApp";
 import { createTestServices } from "../../src/backend/testImpl";
 import {
+    parseJdAnalyzeResult,
+    parseJdInfoResult,
+    parseJdListResult,
     parseResumeInfoResult,
+    parseResumeListResult,
     parseResumeStatusResult,
+    parseResumeStreamEvent,
     parseResumeUploadResult,
 } from "../../src/shared/schemas";
 import type { ResumeStreamEvent } from "../../src/shared/resumeStream";
@@ -44,7 +49,7 @@ describe("resume and JD API behavior", () => {
 
         const list = await request(app).get("/api/resumes");
         expect(list.status).toBe(200);
-        expect(list.body).toMatchObject({
+        expect(parseResumeListResult(list.body)).toMatchObject({
             count: 0,
             resumes: [],
         });
@@ -188,20 +193,26 @@ describe("resume and JD API behavior", () => {
         });
 
         expect(response.status).toBe(201);
-        expect(response.body.jd.tags).toContain("frontend");
-        expect(response.body.jd.requiredSkills).toContain("React");
+        const jd = parseJdAnalyzeResult(response.body).jd;
+
+        expect(jd.tags).toContain("frontend");
+        expect(jd.requiredSkills).toContain("React");
 
         const list = await request(app).get("/api/jds");
         expect(list.status).toBe(200);
-        expect(list.body.count).toBe(1);
-        expect(list.body.jds[0].title).toBe("Senior Frontend Engineer");
-        expect(list.body.jds[0].id).toBe("senior-frontend-engineer");
+        const jdList = parseJdListResult(list.body);
+
+        expect(jdList.count).toBe(1);
+        expect(jdList.jds[0]?.title).toBe("Senior Frontend Engineer");
+        expect(jdList.jds[0]?.id).toBe("senior-frontend-engineer");
 
         const detail = await request(app).get(
             "/api/jds/senior-frontend-engineer",
         );
         expect(detail.status).toBe(200);
-        expect(detail.body.jd.requiredSkills).toContain("React");
+        expect(parseJdInfoResult(detail.body).jd.requiredSkills).toContain(
+            "React",
+        );
     });
 
     it("rejects duplicate job description ids", async () => {
@@ -235,5 +246,5 @@ function parseSseEvents(text: string): ResumeStreamEvent[] {
                 .trim(),
         )
         .filter(Boolean)
-        .map((data) => JSON.parse(data) as ResumeStreamEvent);
+        .map((data) => parseResumeStreamEvent(JSON.parse(data)));
 }

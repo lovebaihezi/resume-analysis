@@ -9,6 +9,7 @@ import type {
     ResumeStatusResult,
     ResumeUploadResult,
 } from "./types";
+import type { ResumeStreamEvent } from "./resumeStream";
 
 const socialLink = arkType({
     name: "string",
@@ -63,6 +64,8 @@ export const resumeAnalysisSchema = arkType({
 });
 
 const resumeStatus = "'creating' | 'ready' | 'failed' | 'archived'";
+const resumeStreamPhase =
+    "'converting_pdf_to_markdown' | 'extracting_content_from_markdown' | 'saving_resume'";
 
 const resumeSummary = arkType({
     "archivedAt?": "string",
@@ -135,6 +138,35 @@ export const jdInfoResultSchema = arkType({
     jd: jobDescription,
 });
 
+const resumeStreamStatusEvent = arkType({
+    message: "string",
+    phase: resumeStreamPhase,
+    type: "'status'",
+});
+
+const resumeStreamTokenEvent = arkType({
+    patch: "unknown",
+    path: "string",
+    type: "'token'",
+    value: "string",
+});
+
+const resumeStreamCompleteEvent = arkType({
+    resume: resumeAnalysisSchema,
+    resumeId: "string",
+    type: "'complete'",
+});
+
+const resumeStreamErrorEvent = arkType({
+    message: "string",
+    type: "'error'",
+});
+
+export const resumeStreamEventSchema = resumeStreamStatusEvent
+    .or(resumeStreamTokenEvent)
+    .or(resumeStreamCompleteEvent)
+    .or(resumeStreamErrorEvent);
+
 export function parseResumeUploadResult(data: unknown): ResumeUploadResult {
     return resumeUploadResultSchema.assert(data) as ResumeUploadResult;
 }
@@ -165,4 +197,8 @@ export function parseJdListResult(data: unknown): JdListResult {
 
 export function parseJdInfoResult(data: unknown): JdInfoResult {
     return jdInfoResultSchema.assert(data) as JdInfoResult;
+}
+
+export function parseResumeStreamEvent(data: unknown): ResumeStreamEvent {
+    return resumeStreamEventSchema.assert(data) as ResumeStreamEvent;
 }
