@@ -85,10 +85,10 @@ test.describe("deployed Cloudflare Worker app", () => {
             const resumeLink = page.locator(`a[href="${resumePath}"]`);
             const resumeRow = page.locator("tr", { has: resumeLink });
 
-            await expect(resumeRow).toContainText(/Ava/i);
+            await expect(resumeRow).toContainText(/Asuka/i);
 
             await page.reload();
-            await expect(resumeRow).toContainText(/Ava/i);
+            await expect(resumeRow).toContainText(/Asuka/i);
 
             await resumeRow.getByRole("button", { name: /archive/i }).click();
             await expect(resumeLink).toHaveCount(0);

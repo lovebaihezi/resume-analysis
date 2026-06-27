@@ -137,6 +137,9 @@ describe("resume analysis UI behavior", () => {
 
         expect(tokenRow).toBeInTheDocument();
         expect(tokenRow.querySelector(".katex")).toBeTruthy();
+        expect(
+            tokenRow.querySelector(".katex-mathml annotation")?.textContent,
+        ).toBe(String.raw`\mathrm{basic.name} \rightarrow \text{Asuka}`);
         expect(window.location.pathname).toBe("/");
     });
 

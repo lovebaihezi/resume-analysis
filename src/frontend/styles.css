@@ -19,3 +19,21 @@ body {
 button.pdf-preview object {
     pointer-events: none;
 }
+
+.latex-token-assignment,
+.latex-token-assignment .katex,
+.latex-token-assignment .katex-html,
+.latex-token-assignment .base,
+.latex-token-assignment .mord,
+.latex-token-assignment .text {
+    overflow-wrap: anywhere;
+}
+
+.latex-token-assignment .katex-html,
+.latex-token-assignment .base {
+    white-space: normal;
+}
+
+.latex-token-assignment .base {
+    width: auto;
+}
